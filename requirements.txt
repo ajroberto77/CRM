@@ -1,0 +1,11 @@
+# Deliberately minimal. Both sibling projects are stdlib-heavy by design and
+# this one keeps that property: everything outside the API process and the
+# database driver uses only the standard library.
+fastapi
+uvicorn[standard]
+psycopg2-binary
+pgvector
+
+# Development only.
+pytest
+httpx
