@@ -1,0 +1,208 @@
+/* ============================================================================
+ * tokens.css — THE design system.
+ *
+ * R5: this is the only file in the repository permitted to contain a literal
+ * color, font stack, radius, or shadow. Everything else references a var().
+ * CI greps for hex colors outside this file.
+ *
+ * The primitive palette is Cal's `:root` block, carried over verbatim so the
+ * two products read as one family. The semantic layer above it is new — Cal is
+ * light-only, and a CRM needs dark mode plus a density control that a
+ * six-tab dashboard never did.
+ *
+ * Rule of use: components reference SEMANTIC tokens (--surface-*, --text-*,
+ * --accent-*). They reference primitives only when nothing semantic fits, which
+ * in practice means never. Primitives exist so the theme blocks below have
+ * something to remap.
+ * ========================================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* ── Primitives — Cal's palette, unchanged ───────────────────────────── */
+  --bg0: #ffffff;
+  --bg1: #f7f8fa;
+  --bg2: #eef0f3;
+  --bg3: #e3e6ec;
+  --border: #e2e5ea;
+
+  --navy: #0d1b2a;
+
+  --text0: #1a2233;
+  --text1: #333b4d;
+  --text2: #5b6472;
+  --text3: #94a0b3;
+
+  --blue: #1b4b78;
+  --blue-light: #3b7cb8;
+  --green: #1f9d6b;
+  --yellow: #b8860f;
+  --red: #c94a4a;
+
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --display: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* ── Semantic surfaces ───────────────────────────────────────────────── */
+  --surface-base: var(--bg0);        /* page + card background            */
+  --surface-sunken: var(--bg1);      /* sidebar, table header             */
+  --surface-raised: var(--bg2);      /* hover, inline code, chips         */
+  --surface-strong: var(--bg3);      /* disabled controls                 */
+  --surface-chrome: var(--navy);     /* titlebar                          */
+  --surface-overlay: rgba(13, 27, 42, .35);
+  --border-default: var(--border);
+  --border-strong: var(--bg3);
+
+  /* ── Semantic text ───────────────────────────────────────────────────── */
+  --text-primary: var(--text0);
+  --text-secondary: var(--text1);
+  --text-muted: var(--text2);
+  --text-subtle: var(--text3);
+  --text-on-accent: #ffffff;
+  --text-on-chrome: rgba(232, 239, 247, .96);
+  --text-on-chrome-muted: rgba(168, 197, 221, .6);
+
+  /* ── Accents + status ────────────────────────────────────────────────── */
+  --accent: var(--blue);
+  --accent-hover: var(--blue-light);
+  --status-ok: var(--green);
+  --status-warn: var(--yellow);
+  --status-error: var(--red);
+  --status-info: var(--blue);
+
+  /* Tinted fills. Cal's badge convention: a 10%-opacity fill over a
+   * 30%-opacity border in the status color. Declared once here so no
+   * component ever hand-writes an rgba(). */
+  --tint-ok-bg: rgba(31, 157, 107, .10);
+  --tint-ok-border: rgba(31, 157, 107, .30);
+  --tint-warn-bg: rgba(184, 134, 15, .10);
+  --tint-warn-border: rgba(184, 134, 15, .30);
+  --tint-error-bg: rgba(201, 74, 74, .10);
+  --tint-error-border: rgba(201, 74, 74, .30);
+  --tint-accent-bg: rgba(27, 75, 120, .08);
+  --tint-accent-border: rgba(27, 75, 120, .25);
+
+  /* ── Elevation ───────────────────────────────────────────────────────── */
+  --shadow-card: 0 1px 2px rgba(20, 30, 45, .04);
+  --shadow-modal: 0 8px 30px rgba(13, 27, 42, .20);
+
+  /* ── Geometry ────────────────────────────────────────────────────────── */
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+  --radius-pill: 20px;
+
+  --titlebar-h: 50px;
+  --sidebar-w: 190px;
+  --content-pad: 24px;
+
+  /* ── Type scale ──────────────────────────────────────────────────────── */
+  --fs-micro: 10px;   /* uppercase labels, badges       */
+  --fs-tiny: 11px;    /* field notes, nav numbers       */
+  --fs-small: 12px;   /* buttons, secondary rows        */
+  --fs-body: 13px;    /* default control + row text     */
+  --fs-base: 14px;    /* body                           */
+  --fs-title: 16px;   /* page + wordmark                */
+  --tracking-wide: .03em;
+  --tracking-wider: .06em;
+  --tracking-logo: .18em;
+
+  /* ── Density ─────────────────────────────────────────────────────────── *
+   * Cal's 14px card-row padding is right for a six-tab dashboard and far too
+   * airy for a 500-row CRM table. Set data-density="compact" on <html>. */
+  --row-pad-y: 14px;
+  --row-pad-x: 16px;
+  --row-h: 40px;
+  --cell-pad-y: 8px;
+}
+
+:root[data-density="compact"] {
+  --row-pad-y: 7px;
+  --row-pad-x: 12px;
+  --row-h: 30px;
+  --cell-pad-y: 4px;
+}
+
+/* ============================================================================
+ * Dark theme.
+ *
+ * Only the semantic layer is remapped — no component CSS changes, which is the
+ * whole point of having the layer. Surfaces invert around the navy that is
+ * already the product's chrome color, so dark mode reads as the same product
+ * rather than a different one.
+ *
+ * System preference is the default signal; an explicit [data-theme] on <html>
+ * wins in both directions so a user toggle can override the system.
+ * ========================================================================= */
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --surface-base: #0f1721;
+    --surface-sunken: #0b121b;
+    --surface-raised: #1a2431;
+    --surface-strong: #243040;
+    --surface-chrome: #070d15;
+    --surface-overlay: rgba(3, 7, 12, .60);
+    --border-default: #222d3b;
+    --border-strong: #2e3b4c;
+
+    --text-primary: #e6ecf4;
+    --text-secondary: #c3cddb;
+    --text-muted: #8e9bad;
+    --text-subtle: #647184;
+
+    --accent: #4f92cf;
+    --accent-hover: #6ba9e0;
+    --status-ok: #35bb87;
+    --status-warn: #d7a52a;
+    --status-error: #e06a6a;
+    --status-info: #4f92cf;
+
+    --tint-ok-bg: rgba(53, 187, 135, .12);
+    --tint-ok-border: rgba(53, 187, 135, .34);
+    --tint-warn-bg: rgba(215, 165, 42, .12);
+    --tint-warn-border: rgba(215, 165, 42, .34);
+    --tint-error-bg: rgba(224, 106, 106, .12);
+    --tint-error-border: rgba(224, 106, 106, .34);
+    --tint-accent-bg: rgba(79, 146, 207, .12);
+    --tint-accent-border: rgba(79, 146, 207, .32);
+
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, .40);
+    --shadow-modal: 0 8px 30px rgba(0, 0, 0, .55);
+  }
+}
+
+:root[data-theme="dark"] {
+  --surface-base: #0f1721;
+  --surface-sunken: #0b121b;
+  --surface-raised: #1a2431;
+  --surface-strong: #243040;
+  --surface-chrome: #070d15;
+  --surface-overlay: rgba(3, 7, 12, .60);
+  --border-default: #222d3b;
+  --border-strong: #2e3b4c;
+
+  --text-primary: #e6ecf4;
+  --text-secondary: #c3cddb;
+  --text-muted: #8e9bad;
+  --text-subtle: #647184;
+
+  --accent: #4f92cf;
+  --accent-hover: #6ba9e0;
+  --status-ok: #35bb87;
+  --status-warn: #d7a52a;
+  --status-error: #e06a6a;
+  --status-info: #4f92cf;
+
+  --tint-ok-bg: rgba(53, 187, 135, .12);
+  --tint-ok-border: rgba(53, 187, 135, .34);
+  --tint-warn-bg: rgba(215, 165, 42, .12);
+  --tint-warn-border: rgba(215, 165, 42, .34);
+  --tint-error-bg: rgba(224, 106, 106, .12);
+  --tint-error-border: rgba(224, 106, 106, .34);
+  --tint-accent-bg: rgba(79, 146, 207, .12);
+  --tint-accent-border: rgba(79, 146, 207, .32);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .40);
+  --shadow-modal: 0 8px 30px rgba(0, 0, 0, .55);
+}
