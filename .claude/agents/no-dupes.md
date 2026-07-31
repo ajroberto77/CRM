@@ -71,6 +71,29 @@ router should have produced, name the registry field that is missing instead.
   `.field-row`/`.notice` collided across stylesheets and silently clobbered each
   other.
 
+## R6 — Domain-neutral core
+
+Grep the diff for vertical vocabulary: `fund`, `commitment`, `capital_call`,
+`distribution`, `lp_`, `nav`, `carry`, `portco`, `vintage`, `investor` used as a
+noun. Any occurrence in `server/core/`, `server/api/` or `server/db/schema.py`
+is a violation — that vocabulary belongs in `modules/funds/`.
+
+Two shapes to catch specifically:
+
+- **A role becoming a table.** A new `investors`, `portfolio_companies` or
+  `co_investors` table is the error the whole design exists to prevent: one
+  legal entity is routinely all three at once, so separate tables split it into
+  duplicates with separate interaction histories. It belongs in `associations`
+  with a role and a date range.
+- **A relationship attribute becoming a column on the entity.** Job title,
+  ownership percentage and board-seat type are properties of the *relationship*,
+  not of the person or the organization, and they change over time. They go in
+  `associations.attributes` with `valid_from`/`valid_to`.
+
+Also check the reverse: a module reaching into core internals rather than going
+through the registry and event bus. That is Odoo's monkey-patching failure mode,
+and `docs/COMPETITIVE-ANALYSIS.md` records what it costs.
+
 ## Safety rules
 
 `CLAUDE.md` lists nine safety rules, each corresponding to a defect that reached

@@ -52,6 +52,19 @@ Entities are declared once in `server/core/registry.py` and get repository, REST
 routes, and list/detail UI generically. **A new entity is a registry entry, not
 a new stack of files.** Hand-written CRUD for a core entity is a bug.
 
+### R6 — Domain-neutral core, vertical in a module
+
+The primary vertical is asset management, but **core must never mention a
+fund** — no fund-shaped column, no `if entity == 'commitment'`, no vertical
+vocabulary in `server/core/` or the generic API. The vertical lives in
+`modules/funds/` as a manifest plus its own tables.
+
+The rule that makes this possible: **a role is not an entity type.** "Investor",
+"portfolio company" and "co-investor" are dated `associations` on ordinary
+organizations, not tables — because one legal entity is routinely all three at
+once, and separate tables would split it into duplicates with separate
+histories. See `docs/VERTICAL-ASSET-MANAGEMENT.md`.
+
 ### R5 — One of each singleton
 
 One `web/styles/tokens.css` — the only file in `web/` or `server/` permitted to

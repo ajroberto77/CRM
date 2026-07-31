@@ -317,9 +317,31 @@ Three amendments the research forces onto the JSONB choice:
   is_primary)`, kind ∈ email/phone/signal/telegram/handle, unique on
   `(kind, value_normalized)`. Omnichannel identity resolution: an inbound Signal
   message, a Telegram chat and an email thread all resolve to one person.
-- **`associations`** — `(from_type, from_id, to_type, to_id, label)`, HubSpot's
-  shape: many-to-many by default, optional labels, surfaced bidirectionally with
-  zero configuration. **Relations are never modelled in JSONB.**
+- **`associations`** — `(from_type, from_id, to_type, to_id, role, attributes
+  jsonb, valid_from, valid_to)`, HubSpot's shape: many-to-many by default,
+  surfaced bidirectionally with zero configuration. **Relations are never
+  modelled in JSONB.** Roles are a closed vocabulary declared per module and
+  validated on write — free text drifts (`works_at` / `works at` /
+  `employee_of`) and silently stops matching.
+
+  The date range is what makes history answerable: *was* an LP in Fund I but not
+  Fund II, *was* CFO until March, *sat* on the board during the investment. It
+  also collapses what would otherwise be four separate tables — employment,
+  board seats, co-investment, LP relationships — into one (R1 applied to the
+  domain rather than to providers). See `docs/VERTICAL-ASSET-MANAGEMENT.md`.
+- **`metric_facts`** — `(subject_type, subject_id, period_start, period_end,
+  metric_key, value_numeric, value_text, currency, source, confidence,
+  document_id)`. Event-shaped and period-shaped data are different tables.
+  "Acme's Q3 EBITDA" is not an event, so it cannot live in `interactions`; it is
+  not a property of the company, because next quarter there is another one; and
+  it cannot live in `custom` without an expression index per metric. Retrofitting
+  this is the same class of pain as retrofitting the interaction log, so it ships
+  alongside it in M2.
+- **`documents`** — `(subject_type, subject_id, kind, filename, storage_key,
+  mime, bytes, uploaded_by, valid_from, valid_until, status)`. `valid_until`
+  is load-bearing: an expired compliance document must **gate an action**, not
+  render a warning — the same "gates raise, never no-op" rule applied to
+  compliance.
 - **`field_provenance`** + append-only **`field_history`** — source ∈
   `human | sync:graph | sync:google | ai:<agent> | enrichment:<vendor>`, with
   confidence, model and prompt version. **Precedence is enforced: human >
@@ -558,6 +580,13 @@ All four are ratified.
    spanning every connected mailbox, with **metadata org-wide and message bodies
    private to the mailbox owner**. Both creation paths are first-class; derived
    records promote on human edit. See "Contacts: typed in *and* observed" above.
+5. **Primary vertical — asset management**, built as a module over a
+   domain-neutral core, with flexibility beyond it preserved by the two-tier
+   model. The governing rule is that **"investor" is not an entity type but a
+   dated role** an organization plays relative to a fund, because in this
+   business one legal entity is routinely an LP, a co-investor and a
+   counterparty at the same time. Core must never mention a fund. See
+   `docs/VERTICAL-ASSET-MANAGEMENT.md`.
 
 The interaction log remains the expensive one to change: retrofitting it under
 an existing contacts model is the hard version, and the metadata/body visibility
@@ -568,13 +597,14 @@ split has to be built into the schema rather than added as a filter later.
 | Phase | Delivers | Done when |
 |---|---|---|
 | M0 | Scaffold, `CLAUDE.md` + R1–R5, `.claude/agents/`, `tokens.css`, `config.py`, pool + schema, users/roles/sessions/RLS | `psql` shows the schema with `FORCE RLS`; login works; first-run setup path exists |
-| M1 | Registry + generic repository + event bus + REST + table/detail/saved views | CRUD on all core entities through one code path |
-| M2 | `interactions` + person/org derivation + `contact_channels` + merged timeline | Importing a mailbox materializes people nobody typed |
+| M1 | Registry + generic repository + event bus + REST + table/detail/saved views + dated `associations` | CRUD on all core entities through one code path; one org holds four roles at once |
+| M2 | `interactions` + person/org derivation + `contact_channels` + merged timeline + `metric_facts` + `documents` | Importing a mailbox materializes people nobody typed; a quarterly KPI charts |
 | M3 | LLM router + fallback chain + settings UI | Chain rolls down on `ProviderUnavailable`, does *not* on malformed output |
 | M4 | OAuth + Microsoft & Google contact sync + provenance | Delta advances; a forced 410 recovers without data loss |
 | M5 | Calendar + scheduling extraction + `proposed_changes` + trust/categories | A proposed meeting queues; auto-accept fires only on category **and** trust |
 | M6 | Signal + Telegram command loop | Approve from a phone; both channels resolve to the right user |
 | M7 | Work queue + workers, deal rotting, Cmd-K, pgvector search, hardening | Full sync runs as a background job |
+| M8 | `modules/funds`: funds, commitments, capital transactions, positions, investments | "Who committed to Fund II, what have they paid, what is it worth" — with core still not mentioning a fund |
 
 ## Verification
 
