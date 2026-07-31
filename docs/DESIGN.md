@@ -267,7 +267,10 @@ web/  styles/tokens.css + components
 
 - **Tier 1 — core entities are real tables**: `interactions`, `persons`,
   `organizations`, `deals`, `tasks`, `notes`, `users`, `pipelines`, `stages`,
-  `saved_views`.
+  `saved_views`. `persons` and `organizations` carry `source`
+  (`human | derived | sync:<provider>`) and `is_derived`, so a typed-in record
+  and an observed one are the same shape and a derived record promotes on first
+  human edit.
 - **Tier 2 — user-defined entities** live in a generic
   `records(object_id, org_id, data jsonb)`, never as runtime DDL.
 
@@ -303,9 +306,13 @@ Three amendments the research forces onto the JSONB choice:
 
 **Tables that do the real work:**
 
-- **`interactions`** — `(id, org_id, occurred_at, kind, direction, thread_id,
-  from_channel, to_channels[], subject_hash, body, external_id, source)`. The
-  primitive. Body is retained — lesson 3 above.
+- **`interactions`** — `(id, org_id, account_id, owner_user_id, occurred_at,
+  kind, direction, thread_id, from_channel, to_channels[], subject_hash, body,
+  external_id, source)`. The primitive. Body is retained (lesson 3 above) but
+  **body access is scoped to `owner_user_id`** while every other column is
+  org-wide — see the contacts section. `account_id` records which connected
+  mailbox observed it, so the same message arriving in two users' mailboxes
+  deduplicates on `external_id` per account without collapsing provenance.
 - **`contact_channels`** — `(person_id, kind, value_normalized, value_raw,
   is_primary)`, kind ∈ email/phone/signal/telegram/handle, unique on
   `(kind, value_normalized)`. Omnichannel identity resolution: an inbound Signal
@@ -321,10 +328,14 @@ Three amendments the research forces onto the JSONB choice:
   proposed_value, rationale, citations[], agent, confidence, status,
   reviewed_by, reviewed_at, decided_by)`.
 - **`trusted_senders`** + `persons.auto_accept` — see below.
-- **`embeddings`** — `(owner_type, owner_id, chunk_kind, content_hash, model,
-  dim, embedding vector)` with HNSW, keyed by content hash so re-embedding is
-  idempotent and a model change is a backfill. **Vectors never go on record
-  tables.** The interaction log is the RAG corpus.
+- **`embeddings`** — `(owner_type, owner_id, visibility_user_id, chunk_kind,
+  content_hash, model, dim, embedding vector)` with HNSW, keyed by content hash
+  so re-embedding is idempotent and a model change is a backfill. **Vectors
+  never go on record tables.** The interaction log is the RAG corpus, so an
+  embedding derived from a message body inherits that body's owner scope —
+  `visibility_user_id` is null for org-wide content and set for body-derived
+  content, and retrieval filters on it. Without this, semantic search silently
+  becomes a channel for reading other people's mail.
 
 Plus CATO's `work_queue` + `workers`, and `llm_calls` for audit.
 
@@ -389,6 +400,68 @@ malformed hash denying access rather than 500-ing every request.
 Cal's **fail-open-when-unconfigured** choice does *not* transfer — it exists so
 pulling the change can't lock a single operator out of their own Settings page.
 A multi-user CRM fails closed, with a first-run setup path instead.
+
+#### What "EspoCRM-sized" excludes, and why
+
+The permission model is four things: a role → object → CRUD grid, record
+visibility at all/team/own/none per object per role, field masking on a small
+set of sensitive fields, and an admin/non-admin split for settings and provider
+credentials. Multiple roles merge permissively. That is one predicate injected
+at one choke point.
+
+Enterprise permissions add criteria-based **sharing rules**, **territory
+hierarchies** where visibility is inherited through a management tree, org-wide
+defaults with per-object overrides, manual per-record shares, and a general ABAC
+policy engine. Salesforce's version has seven interacting mechanisms deciding
+visibility on a single row.
+
+The cost is not the feature count. It is that visibility stops being a predicate
+that can be read and becomes a **computed set**: enterprise implementations
+maintain materialized share tables and recalculate them on ownership change,
+role moves and rule edits, which is a documented multi-hour operation on a large
+org. Every query path, export, background job and AI agent must route through
+that engine or it leaks.
+
+For a team where everyone can see everything and `owner_id` mostly answers "who
+is on point," the four items above are the entire requirement. Because
+visibility lives in one function, adding a sharing rule later is a change to
+that function, not a data migration.
+
+### Contacts: typed in *and* observed, across many mailboxes
+
+Both creation paths are first-class. A person record carries `source`
+(`human | derived | sync:<provider>`) and `is_derived`; typing one in creates it
+directly, and a derived record is promoted the moment a human edits it. Neither
+path is a special case of the other.
+
+**Multiple mailboxes in one org feed one contact graph.** If two users have
+connected accounts, mail from `bob@acme.com` in either resolves through
+`contact_channels` to the *same* person record, and that person's timeline
+carries interactions from both. This is the point — "who here already knows
+Bob?" is not answerable otherwise, and it is why the interaction log is org-
+scoped rather than user-scoped.
+
+That creates one privacy decision that must be explicit, because the default
+falls out either way and only one of them is defensible:
+
+> **Interaction metadata is org-wide; message bodies are private to the mailbox
+> owner by default.**
+
+Who corresponded with whom, when, and how often is what powers relationship
+strength, staleness and warm-intro paths — it must be shared or the graph is
+worthless. The message text is a different thing, and one user's correspondence
+should not become readable to the whole org as a side effect of a contact
+appearing in both mailboxes. This is Affinity's model.
+
+Consequences to enforce:
+
+- `interactions` splits visibility: metadata columns are readable org-wide,
+  `body` is gated to the owning account's user (and admins, explicitly).
+- LLM enrichment over **metadata** may run org-wide; extraction over **bodies**
+  runs only within the owning user's scope, and any derived field written from a
+  body records that scope in `field_provenance`.
+- A body-scoped embedding must never be retrieved into another user's RAG
+  context. `embeddings` therefore carries the same owner scope as its source.
 
 ### Modularity
 
@@ -467,24 +540,28 @@ One structural change: JA gates every command on a single owner phone number.
 Here the sender resolves through `contact_channels` → `users`; an unrecognized
 sender is ignored exactly as JA ignores a non-owner.
 
-## Open decisions
+## Decisions
 
-These four were proposed and not explicitly ratified. Work proceeds on them;
-three are cheap to revisit, one is not.
+All four are ratified.
 
-1. **Stack:** FastAPI + React/TypeScript/Vite. Python keeps direct
-   line-of-sight to Cal's and JA's routers, extraction, Graph and signal-cli
-   code, all of which would otherwise be rewritten — violating R1 before the
-   repo exists. Dependencies stay minimal; Cal and JA are both stdlib-heavy by
-   design. *Cheap to revisit until M1.*
-2. **Multi-user:** EspoCRM-sized model, single seeded org, RLS on `org_id`.
-   *Cheap — tightening the policy later is a policy change, not a migration.*
-3. **Sync:** one-way first, write-back later through the approval queue.
-   *Cheap — write-back is additive.*
-4. **Data model:** two-tier, interaction-derived. **Expensive.** Retrofitting an
-   interaction log under an existing contacts model is the hard version, and the
-   two-tier split for user-defined objects is much easier to build in than to
-   bolt on. If this is wrong, it should be corrected before M2 ships.
+1. **Stack — FastAPI + React/TypeScript/Vite.** Confirmed; the same shape is
+   already working in sibling projects. Python keeps direct line-of-sight to
+   Cal's and JA's routers, extraction, Graph and signal-cli code, all of which
+   would otherwise be rewritten — violating R1 before the repo exists.
+   Dependencies stay minimal.
+2. **Multi-user — EspoCRM-sized**, single seeded org, RLS on `org_id`. See
+   "What EspoCRM-sized excludes, and why" above for the boundary and its
+   rationale. Tightening later is a change to one function, not a migration.
+3. **Sync — one-way first** (provider → CRM with tombstones), write-back later
+   per-field through the approval queue.
+4. **Contacts — typed in *and* observed**, over an org-wide interaction log
+   spanning every connected mailbox, with **metadata org-wide and message bodies
+   private to the mailbox owner**. Both creation paths are first-class; derived
+   records promote on human edit. See "Contacts: typed in *and* observed" above.
+
+The interaction log remains the expensive one to change: retrofitting it under
+an existing contacts model is the hard version, and the metadata/body visibility
+split has to be built into the schema rather than added as a filter later.
 
 ## Phases
 

@@ -143,6 +143,13 @@ deployment in a sibling project; `docs/SOURCE-PATTERNS.md` records which.
    never matches an auto-accept rule.
 9. **Destructive paths default off** behind an explicit setting, with approval
    defaulting to `manual`.
+10. **Message bodies are owner-scoped; interaction metadata is org-wide.** The
+    contact graph spans every connected mailbox in the org, so who-talked-to-whom
+    must be shared — but one user's correspondence must not become readable to
+    the whole org just because a contact appears in two mailboxes. Anything
+    derived from a body inherits that scope, **including embeddings**: retrieval
+    filters on `visibility_user_id`, or semantic search quietly becomes a way to
+    read other people's mail.
 
 ## Operating rules
 

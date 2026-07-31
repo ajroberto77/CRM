@@ -74,6 +74,18 @@ sibling project's guide singles this out as a lesson learned the hard way.
 can insert an unnormalized value breaks identity resolution across email,
 Signal and Telegram.
 
+## Body scoping
+
+`interactions.body` is readable only by `owner_user_id` (plus admins); every
+other column on that table is org-wide. Check any query that selects `body`, or
+`SELECT *` on `interactions`, for the owner predicate.
+
+Anything derived from a body inherits the scope. `embeddings.visibility_user_id`
+is null for org-wide content and set for body-derived content, and **every
+retrieval must filter on it**. An unfiltered vector search over
+body-derived embeddings is a data-disclosure defect, not a missing feature —
+flag it as such.
+
 ## Data-loss checks
 
 - No cursor, delta token, or offset is committed on a path where processing
