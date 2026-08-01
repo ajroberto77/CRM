@@ -259,7 +259,16 @@ def register_validator(
     a validator scoped to `actions=("update",)` never fires on create or
     delete, so a rule about closing a commitment cannot accidentally block
     creating one.
+
+    Idempotent like `register()`/`register_role()`: installing the same
+    module twice (every real app startup and every test that spins up a
+    fresh `TestClient` both call `modules.install_enabled_modules()`) must
+    re-declare the same rule, not accumulate a second copy of it that runs
+    twice per write.
     """
+    for existing in _VALIDATORS:
+        if existing.entity == entity_name and existing.fn is fn and existing.module == module:
+            return
     _VALIDATORS.append(_RegisteredValidator(entity_name, fn, actions, order, module))
     _VALIDATORS.sort(key=lambda v: v.order)
 

@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 
 from server import config
 from server.api import auth, records
-from server.core import associations, passwords, permissions, query, registry, repository, sessions, users
+from server.core import associations, modules, passwords, permissions, query, registry, repository, sessions, users
 from server.core.permissions import Principal
 from server.db import pool, schema
 
@@ -31,6 +31,13 @@ class RlsNotEnforced(RuntimeError):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Populate the registry and let every installed module contribute its
+    # tables BEFORE migrating -- the same order tests/conftest.py uses.
+    # Without this, the app boots with an empty registry: every /records
+    # route 404s as "unknown entity" and the schema never gains a single
+    # core or module table, because nothing else in server/ calls these.
+    modules.install_enabled_modules()
+
     schema.migrate()
 
     problems = schema.verify_rls()

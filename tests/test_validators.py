@@ -122,6 +122,26 @@ class TestGenericMechanism:
         repository.create(principal, "note", {"body": "x"})
         assert calls == []
 
+    def test_registering_the_same_validator_twice_does_not_duplicate_it(self, principal):
+        """Regression: `modules.install_enabled_modules()` (server/core/
+        modules.py) legitimately runs more than once per process -- every
+        real app startup, and every test that builds a fresh TestClient.
+        register_validator must be idempotent for the same (entity, fn,
+        module) the way register()/register_role() already are, or a
+        validator that survives repeated installs fires once per install
+        instead of once per write."""
+        calls = []
+
+        def track(ctx: registry.ValidationContext) -> None:
+            calls.append(1)
+
+        registry.register_validator("note", track, module="test_module")
+        registry.register_validator("note", track, module="test_module")
+        registry.register_validator("note", track, module="test_module")
+
+        repository.create(principal, "note", {"body": "x"})
+        assert calls == [1]
+
     def test_no_op_update_still_runs_validators(self, principal):
         """Unlike the event bus, which skips a no-op diff entirely, a
         validator must still see every write attempt -- an empty diff is not

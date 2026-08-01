@@ -123,6 +123,18 @@ class Config:
             os.environ.get("CRM_MESSAGING_SEND_ENABLED", "false")
         )
 
+        # ── Modules ───────────────────────────────────────────────────────
+        # Which `modules/<name>` packages the app installs at startup, by
+        # directory name only -- so naming a module here is deployment
+        # configuration, never a vertical import in server/core or the
+        # generic API (R6). Comma-separated; default is every module this
+        # deployment ships with today.
+        self.enabled_modules: tuple[str, ...] = tuple(
+            m.strip()
+            for m in os.environ.get("CRM_ENABLED_MODULES", "funds,investor_portal").split(",")
+            if m.strip()
+        )
+
 
 # The singleton. Import the getters below, not this.
 _config = Config()
@@ -228,6 +240,12 @@ def contact_writeback_enabled() -> bool:
 
 def messaging_send_enabled() -> bool:
     return _config.messaging_send_enabled
+
+
+# ── Modules ──────────────────────────────────────────────────────────────────
+
+def get_enabled_modules() -> tuple[str, ...]:
+    return _config.enabled_modules
 
 
 # ── Secrets ──────────────────────────────────────────────────────────────────

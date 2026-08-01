@@ -27,7 +27,7 @@ os.environ.setdefault("CRM_DB_HOST", "localhost")
 os.environ.setdefault("CRM_SESSION_COOKIE_SECURE", "false")
 
 from server import config  # noqa: E402
-from server.core import events, permissions, registry, users  # noqa: E402
+from server.core import events, modules, permissions, registry, users  # noqa: E402
 from server.db import pool, schema  # noqa: E402
 
 
@@ -48,15 +48,11 @@ def _migrated() -> None:
         )
     registry.reset()
     schema.reset_module_schema()
-    registry.register_core_entities()
-    # Every module installs exactly as a deployment would: one call, no core
-    # changes. funds' tables reach the migration through
-    # register_module_schema(); investor_portal owns no tables yet (M9a+),
-    # only the write-time gate on commitment closing.
-    import modules.funds
-    import modules.investor_portal
-    modules.funds.install()
-    modules.investor_portal.install()
+    # The same loader server/api/app.py's lifespan uses, driven by
+    # config.get_enabled_modules() -- one implementation of "register core,
+    # then let every enabled module install" (R1), not a second copy of it
+    # here that could drift from what a real deployment actually boots.
+    modules.install_enabled_modules()
     schema.migrate()
     yield
     pool.close_pool()

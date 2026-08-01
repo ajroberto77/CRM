@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from server.core import users
+from server.core import modules, registry, users
 
 
 def _login(client, email="admin@example.com", password="correct-horse-battery"):
@@ -134,6 +134,22 @@ class TestCrud:
         assert created.status_code == 201, created.text
         assert created.json()["record"]["name"] == "Fund I"
 
+    def test_saved_view_create_with_only_required_fields(self, client, org_id, admin):
+        """core.saved_views' filters/sort/columns columns are NOT NULL with a
+        jsonb DEFAULT -- that default only applies when the column is left
+        out of the INSERT entirely. A client must omit the key, not send an
+        explicit JSON null, to get it; this locks in that the omit-path
+        works (the frontend's web/src/views/useSavedViews.ts relies on it)."""
+        _login(client)
+        created = client.post(
+            "/records/saved_view", json={"entity": "organization", "name": "My view", "kind": "table"}
+        )
+        assert created.status_code == 201, created.text
+        record = created.json()["record"]
+        assert record["filters"] == []
+        assert record["sort"] == []
+        assert record["columns"] == []
+
 
 class TestAssociations:
     def test_associate_end_and_delete(self, client, org_id, admin):
@@ -207,6 +223,49 @@ class TestPermissions:
             "/records/organization", params={"filter": "{not json"}
         )
         assert response.status_code == 400
+
+
+class TestEntityRoles:
+    def test_lists_roles_from_both_sides(self, client, org_id, admin):
+        _login(client)
+        response = client.get("/records/person/roles")
+        assert response.status_code == 200
+        roles = {(r["role"], r["direction"]) for r in response.json()["roles"]}
+        assert ("works_at", "from") in roles  # person is the from-side
+        # advisor_to's inverse label applies to person as a to-side too
+        assert any(r == "advisor_to" and d == "to" for r, d in roles)
+
+    def test_unknown_entity_is_404(self, client, org_id, admin):
+        _login(client)
+        response = client.get("/records/not_a_real_entity/roles")
+        assert response.status_code == 404
+
+
+class TestAppBootstrapsItsOwnRegistry:
+    def test_lifespan_populates_the_registry_without_conftest_help(self):
+        """Regression: server/api/app.py's lifespan must call the module
+        loader itself. This is easy to lose silently, because
+        tests/conftest.py's session-scoped `_migrated` fixture ALSO
+        populates the registry before any `client` fixture ever runs --
+        which would mask a real deployment's lifespan doing nothing at all,
+        exactly the bug this test catches (found by driving the actual app
+        in a browser, where nothing plays conftest's role)."""
+        from fastapi.testclient import TestClient
+
+        from server.api.app import app
+
+        registry.reset()
+        try:
+            assert registry.entities() == []
+            with TestClient(app):
+                pass  # lifespan runs on enter/exit
+            assert "organization" in registry.entities()
+            assert "fund" in registry.entities()  # a module's entity, not just core's
+        finally:
+            # Restore what conftest's session fixture set up, so every test
+            # after this one still sees a populated registry.
+            registry.reset()
+            modules.install_enabled_modules()
 
 
 def json_bad_op() -> str:

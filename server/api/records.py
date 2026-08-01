@@ -159,6 +159,33 @@ def entity_schema(
     }
 
 
+@router.get("/{entity}/roles")
+def entity_roles(
+    entity: str, principal: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    """Every association role `entity` can take part in, from either side —
+    what a "link record" control builds its role picker from, so a new role
+    (registered by any module) is reachable with no frontend change (R4)."""
+    registry.entity(entity)  # UnknownEntity -> 404 via the app handler
+    principal.require("read", entity)
+
+    available = []
+    for role_spec in registry.roles():
+        if entity in role_spec.from_types:
+            available.append({
+                "role": role_spec.name, "direction": "from",
+                "label": role_spec.name.replace("_", " "),
+                "target_types": list(role_spec.to_types),
+            })
+        if entity in role_spec.to_types and not role_spec.symmetric:
+            available.append({
+                "role": role_spec.name, "direction": "to",
+                "label": (role_spec.inverse_label or role_spec.name).replace("_", " "),
+                "target_types": list(role_spec.from_types),
+            })
+    return {"roles": available}
+
+
 # ── Read ─────────────────────────────────────────────────────────────────────
 
 @router.get("/{entity}")
