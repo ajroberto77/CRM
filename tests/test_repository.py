@@ -18,11 +18,11 @@ class TestRegistry:
         hardcodes owner_id, so an entity whose table lacks it produces invalid
         SQL only when a NON-ADMIN queries it -- which every test using the
         admin fixture would sail straight past."""
-        assert registry.verify(schema.TABLES) == []
+        assert registry.verify(schema.all_tables()) == []
 
     def test_declared_tables_all_exist(self):
         for spec in registry.all_entities():
-            assert spec.table in schema.TABLES
+            assert spec.table in schema.all_tables()
 
     def test_unknown_entity_and_field_raise(self):
         with pytest.raises(registry.UnknownEntity):

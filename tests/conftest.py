@@ -47,7 +47,12 @@ def _migrated() -> None:
             allow_module_level=True,
         )
     registry.reset()
+    schema.reset_module_schema()
     registry.register_core_entities()
+    # The vertical installs exactly as a deployment would: one call, no core
+    # changes. Its tables reach the migration through register_module_schema().
+    import modules.funds
+    modules.funds.install()
     schema.migrate()
     yield
     pool.close_pool()
@@ -82,7 +87,7 @@ def _clean_tables(_migrated) -> None:
     """
     yield
     with pool.system_transaction() as cur:
-        tables = ", ".join(reversed(list(schema.TABLES)))
+        tables = ", ".join(reversed(list(schema.all_tables())))
         cur.execute(f"TRUNCATE {tables} RESTART IDENTITY CASCADE")
 
 

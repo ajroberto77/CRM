@@ -282,8 +282,11 @@ def fetch_many(
     with pool.transaction(
         org_id=principal.org_id, user_id=principal.user_id, readonly=True
     ) as cur:
+        # ::uuid[] is required: psycopg2 sends a Python list of str as text[],
+        # and `uuid = text` has no operator.
         cur.execute(
-            f"SELECT t.* FROM {spec.table} t WHERE t.id = ANY(%s) AND ({visible_sql})",
+            f"SELECT t.* FROM {spec.table} t "
+            f"WHERE t.id = ANY(%s::uuid[]) AND ({visible_sql})",
             [ids] + list(visible_params),
         )
         rows = [permissions.mask_record(principal, entity, dict(r)) for r in cur.fetchall()]

@@ -664,6 +664,49 @@ VIEWS: tuple[str, ...] = (
 )
 
 
+# ── Module-contributed schema ────────────────────────────────────────────────
+#
+# A module registers its own tables and indexes through here. Core never names
+# them (R6) -- it only knows that some tables came from somewhere else, and they
+# go through exactly the same migration, RLS and verification path as core's.
+#
+# Module tables get the standard org_id predicate. A module cannot opt out of
+# tenant isolation: UNSCOPED_TABLES is core's alone, and the two identity tables
+# in it are the only deliberate holes in the boundary.
+
+_MODULE_TABLES: dict[str, dict[str, str]] = {}
+_MODULE_INDEXES: list[str] = []
+
+
+def register_module_schema(
+    tables: dict[str, dict[str, str]], indexes: Iterable[str] = ()
+) -> None:
+    """Contribute tables and indexes from a module. Idempotent."""
+    for name, columns in tables.items():
+        if name in TABLES:
+            raise ValueError(f"{name} is a core table and cannot be redefined")
+        _MODULE_TABLES[name] = columns
+    for statement in indexes:
+        if statement not in _MODULE_INDEXES:
+            _MODULE_INDEXES.append(statement)
+
+
+def reset_module_schema() -> None:
+    """Drop module registrations. Tests only."""
+    _MODULE_TABLES.clear()
+    _MODULE_INDEXES.clear()
+
+
+def all_tables() -> dict[str, dict[str, str]]:
+    """Core tables followed by module tables. Order matters: module tables
+    reference core ones, and _ensure_table creates in insertion order."""
+    return {**TABLES, **_MODULE_TABLES}
+
+
+def predicate_for(table: str) -> str:
+    return RLS_PREDICATES.get(table, _ORG_PREDICATE)
+
+
 # ── Migration ────────────────────────────────────────────────────────────────
 
 def _pk_clause(table: str, columns: dict[str, str]) -> str:
@@ -704,7 +747,8 @@ def _ensure_rls(cur, table: str, predicate: str) -> None:
 def migrate(*, tables: Optional[Iterable[str]] = None) -> None:
     """Bring the database up to the schema declared above. Idempotent: safe to
     run on every boot, and the only supported way to change the schema."""
-    wanted = list(tables) if tables is not None else list(TABLES)
+    every = all_tables()
+    wanted = list(tables) if tables is not None else list(every)
     with pool.system_transaction() as cur:
         _ensure_schemas(cur)
         # Functions precede indexes: the promoted custom-field indexes in
@@ -712,15 +756,15 @@ def migrate(*, tables: Optional[Iterable[str]] = None) -> None:
         for statement in FUNCTIONS:
             cur.execute(statement)
         for table in wanted:
-            _ensure_table(cur, table, TABLES[table])
-        for statement in INDEXES:
+            _ensure_table(cur, table, every[table])
+        for statement in list(INDEXES) + _MODULE_INDEXES:
             cur.execute(statement)
         for statement in VIEWS:
             cur.execute(statement)
         for table in wanted:
             if table in UNSCOPED_TABLES:
                 continue
-            _ensure_rls(cur, table, RLS_PREDICATES[table])
+            _ensure_rls(cur, table, predicate_for(table))
 
 
 # ── Verification ─────────────────────────────────────────────────────────────
@@ -743,7 +787,7 @@ def verify_rls() -> list[dict[str, object]]:
         )
         actual = {row["table_name"]: dict(row) for row in cur.fetchall()}
 
-    for table in TABLES:
+    for table in all_tables():
         state = actual.get(table)
         if state is None:
             problems.append({"table": table, "problem": "missing"})
