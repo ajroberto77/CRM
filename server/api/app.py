@@ -15,11 +15,12 @@ from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from server import config
-from server.api import auth
-from server.core import passwords, permissions, sessions, users
+from server.api import auth, records
+from server.core import associations, passwords, permissions, query, registry, repository, sessions, users
 from server.core.permissions import Principal
 from server.db import pool, schema
 
@@ -54,6 +55,37 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="CRM", version="0.1.0", lifespan=lifespan)
+
+app.include_router(records.router)
+app.include_router(records.association_router)
+
+
+# ── Errors ───────────────────────────────────────────────────────────────────
+# Registered once here rather than repeated in every route body -- see
+# server/api/records.py's module docstring, which relies on this mapping.
+
+@app.exception_handler(repository.NotFound)
+@app.exception_handler(registry.UnknownEntity)
+def _not_found(request: Request, exc: Exception) -> Response:
+    return JSONResponse(status_code=status.HTTP_404_NOT_FOUND, content={"detail": str(exc)})
+
+
+@app.exception_handler(permissions.PermissionDenied)
+def _forbidden(request: Request, exc: Exception) -> Response:
+    return JSONResponse(status_code=status.HTTP_403_FORBIDDEN, content={"detail": str(exc)})
+
+
+@app.exception_handler(repository.ValidationError)
+@app.exception_handler(registry.UnknownField)
+@app.exception_handler(query.FilterError)
+@app.exception_handler(associations.AssociationError)
+def _bad_request(request: Request, exc: Exception) -> Response:
+    return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(exc)})
+
+
+@app.exception_handler(repository.Conflict)
+def _conflict(request: Request, exc: Exception) -> Response:
+    return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={"detail": str(exc)})
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────────

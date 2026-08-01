@@ -1,0 +1,215 @@
+"""The generic REST router (`server/api/records.py`) and the error-mapping
+handlers registered on the app (`server/api/app.py`).
+
+Exercised at the HTTP layer via `TestClient` rather than by calling
+`server.core.repository` directly -- the point of this file is that R4's
+promise (one CRUD path reachable by every entity, core's and every module's,
+with zero per-entity route code) actually holds over the wire, including the
+error-status mapping that `records.py` itself deliberately does not implement.
+"""
+from __future__ import annotations
+
+import pytest
+
+from server.core import users
+
+
+def _login(client, email="admin@example.com", password="correct-horse-battery"):
+    response = client.post("/auth/login", json={"email": email, "password": password})
+    assert response.status_code == 200, response.text
+    return response
+
+
+class TestEntityMetadata:
+    def test_list_entities_only_includes_readable_ones(self, client, org_id, admin):
+        _login(client)
+        response = client.get("/records")
+        assert response.status_code == 200
+        names = {e["name"] for e in response.json()["entities"]}
+        assert "organization" in names
+        assert "person" in names
+        assert "fund" in names  # modules/funds proves the module seam here too
+
+    def test_schema_describes_fields_and_custom_fields(self, client, org_id, admin):
+        _login(client)
+        response = client.get("/records/organization/schema")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["name"] == "organization"
+        assert "name" in body["fields"]
+        assert body["fields"]["name"]["required"] is True
+        assert body["custom_fields"] == []
+
+    def test_schema_for_unknown_entity_is_404(self, client, org_id, admin):
+        _login(client)
+        response = client.get("/records/not_a_real_entity/schema")
+        assert response.status_code == 404
+
+    def test_schema_is_reachable_by_a_granted_non_admin(self, client, org_id, member):
+        """The schema endpoint checks `read` on the entity, not `is_admin` --
+        a member with an explicit grant sees it despite never being admin."""
+        role = users.create_role(org_id, "Reader")
+        users.set_role_scope(org_id, str(role["id"]), "organization", read_level="all")
+        users.assign_role(org_id, str(member["id"]), str(role["id"]))
+
+        _login(client, "member@example.com")
+        response = client.get("/records/organization/schema")
+        assert response.status_code == 200
+
+
+class TestCrud:
+    def test_create_list_get_update_delete(self, client, org_id, admin):
+        _login(client)
+
+        created = client.post("/records/organization", json={"name": "Acme Corp"})
+        assert created.status_code == 201, created.text
+        record = created.json()["record"]
+        assert record["name"] == "Acme Corp"
+        record_id = record["id"]
+
+        listed = client.get("/records/organization")
+        assert listed.status_code == 200
+        assert listed.json()["total"] == 1
+
+        got = client.get(f"/records/organization/{record_id}")
+        assert got.status_code == 200
+        assert got.json()["record"]["name"] == "Acme Corp"
+
+        updated = client.patch(
+            f"/records/organization/{record_id}", json={"changes": {"name": "Acme Corporation"}}
+        )
+        assert updated.status_code == 200
+        assert updated.json()["record"]["name"] == "Acme Corporation"
+
+        deleted = client.delete(f"/records/organization/{record_id}")
+        assert deleted.status_code == 204
+
+        missing = client.get(f"/records/organization/{record_id}")
+        assert missing.status_code == 404
+
+    def test_get_missing_record_is_404(self, client, org_id, admin):
+        _login(client)
+        response = client.get(
+            "/records/organization/00000000-0000-0000-0000-000000000000"
+        )
+        assert response.status_code == 404
+
+    def test_create_missing_required_field_is_400(self, client, org_id, admin):
+        _login(client)
+        response = client.post("/records/organization", json={"domain": "acme.com"})
+        assert response.status_code == 400
+
+    def test_optimistic_concurrency_conflict_is_409(self, client, org_id, admin):
+        _login(client)
+        created = client.post("/records/organization", json={"name": "Acme"}).json()["record"]
+
+        stale = client.patch(
+            f"/records/organization/{created['id']}",
+            json={
+                "changes": {"name": "Too Late"},
+                "if_unmodified_since": "2000-01-01T00:00:00+00:00",
+            },
+        )
+        assert stale.status_code == 409
+
+    def test_query_endpoint_matches_querystring_semantics(self, client, org_id, admin):
+        _login(client)
+        client.post("/records/organization", json={"name": "Acme"})
+        client.post("/records/organization", json={"name": "Globex"})
+
+        response = client.post(
+            "/records/organization/query",
+            json={"filters": {"field": "name", "op": "eq", "value": "Globex"}},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert body["records"][0]["name"] == "Globex"
+
+    def test_module_entity_gets_the_same_generic_crud(self, client, org_id, admin):
+        """R4's whole promise: `modules/funds`'s `fund` entity works through
+        this router with zero fund-specific route code."""
+        _login(client)
+        created = client.post("/records/fund", json={"name": "Fund I"})
+        assert created.status_code == 201, created.text
+        assert created.json()["record"]["name"] == "Fund I"
+
+
+class TestAssociations:
+    def test_associate_end_and_delete(self, client, org_id, admin):
+        _login(client)
+        person = client.post("/records/person", json={"full_name": "Jane Doe"}).json()["record"]
+        org = client.post("/records/organization", json={"name": "Acme"}).json()["record"]
+
+        created = client.post(
+            "/associations",
+            json={
+                "role": "works_at",
+                "from_type": "person", "from_id": person["id"],
+                "to_type": "organization", "to_id": org["id"],
+            },
+        )
+        assert created.status_code == 201, created.text
+        association = created.json()["association"]
+
+        related = client.get(f"/records/person/{person['id']}/related")
+        assert related.status_code == 200
+        blocks = related.json()["related"]
+        assert any(
+            item["role"] == "works_at"
+            for items in blocks.values()
+            for item in items
+        )
+
+        ended = client.post(f"/associations/{association['id']}/end", json={})
+        assert ended.status_code == 200
+        assert ended.json()["association"]["valid_to"] is not None
+
+        deleted = client.delete(f"/associations/{association['id']}")
+        assert deleted.status_code == 204
+
+    def test_unknown_role_is_400(self, client, org_id, admin):
+        _login(client)
+        person = client.post("/records/person", json={"full_name": "Jane Doe"}).json()["record"]
+        org = client.post("/records/organization", json={"name": "Acme"}).json()["record"]
+
+        response = client.post(
+            "/associations",
+            json={
+                "role": "not_a_real_role",
+                "from_type": "person", "from_id": person["id"],
+                "to_type": "organization", "to_id": org["id"],
+            },
+        )
+        assert response.status_code == 400
+
+
+class TestPermissions:
+    def test_unauthenticated_is_401(self, client, org_id, admin):
+        response = client.get("/records/organization")
+        assert response.status_code == 401
+
+    def test_admin_only_entity_is_403_for_a_member(self, client, org_id, member):
+        _login(client, "member@example.com")
+        response = client.get("/records/pipeline")
+        assert response.status_code == 403
+
+    def test_bad_filter_syntax_is_400(self, client, org_id, admin):
+        _login(client)
+        response = client.get(
+            "/records/organization", params={"filter": json_bad_op()}
+        )
+        assert response.status_code == 400
+
+    def test_malformed_json_filter_is_400(self, client, org_id, admin):
+        _login(client)
+        response = client.get(
+            "/records/organization", params={"filter": "{not json"}
+        )
+        assert response.status_code == 400
+
+
+def json_bad_op() -> str:
+    import json
+
+    return json.dumps({"field": "name", "op": "not_a_real_operator", "value": "x"})

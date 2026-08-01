@@ -61,13 +61,40 @@ class ValidationError(ValueError):
 
 def _custom_fields(cur, entity: str) -> list[dict[str, Any]]:
     """This org's custom fields for one entity. Read inside the caller's
-    transaction so it is tenant-scoped by RLS like everything else."""
+    transaction so it is tenant-scoped by RLS like everything else.
+
+    Selects the union of what every caller needs: the write/query path
+    (`entity`, `key`, `kind`, `options`, `archived_at`) and the read-only
+    schema-introspection path (`label`, `indexed`) that `custom_field_defs`
+    exposes over the API — one query, not two near-duplicates.
+    """
     cur.execute(
-        "SELECT entity, key, kind, options, archived_at FROM core.custom_fields "
-        "WHERE entity = %s AND archived_at IS NULL",
+        "SELECT entity, key, kind, label, options, indexed, archived_at "
+        "FROM core.custom_fields WHERE entity = %s AND archived_at IS NULL "
+        "ORDER BY created_at",
         (entity,),
     )
     return [dict(r) for r in cur.fetchall()]
+
+
+def custom_field_defs(principal: Principal, entity: str) -> list[dict[str, Any]]:
+    """Custom field DEFINITIONS for `entity` — key/kind/label/options/indexed —
+    readable by anyone who can read `entity` itself.
+
+    Deliberately NOT routed through `list_records(principal, "custom_field",
+    ...)`: `custom_field` is `admin_only`, correctly, because *creating or
+    editing* a definition is a schema change. But a member building a table or
+    a create form for `person` needs to know what custom fields exist on
+    `person` regardless of whether they personally administer the schema —
+    gating that behind admin would mean a non-admin's table silently never
+    shows a custom column anyone else can see the data in.
+    """
+    registry.entity(entity)  # raises UnknownEntity for a bad name
+    principal.require("read", entity)
+    with pool.transaction(
+        org_id=principal.org_id, user_id=principal.user_id, readonly=True
+    ) as cur:
+        return _custom_fields(cur, entity)
 
 
 # ── Value validation ─────────────────────────────────────────────────────────
