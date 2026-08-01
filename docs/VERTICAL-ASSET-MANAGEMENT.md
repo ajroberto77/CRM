@@ -221,12 +221,15 @@ entity names in core.
 ## The LP portal — decided, see `docs/INVESTOR-PORTAL.md`
 
 The shape below stands and is now a planned workstream (M9a–c) rather than a
-deferred question, extended with investor classification and a public site. One
-constraint discovered while designing it changes what the software may render:
-under Reg D **506(b)** an offering may not be shown publicly and may only reach
-investors with a pre-existing substantive relationship — so qualification gates
-the query, not the navigation, and the dated interaction log becomes part of the
-evidence that the relationship predates the offering.
+deferred question, extended with investor classification and a public site.
+Confirmed: accredited investors only today, modeled as an extensible category
+registry rather than a hard-coded assumption; self-certifying, which settles
+the offering exemption as 506(b); and the public marketing site **never**
+shows an offering — a permanent product rule enforced structurally (no import
+path from the public site to offering data), not merely a policy that would
+loosen if the exemption ever changed. Qualification gates the query, not the
+navigation, and the dated interaction log is part of the evidence that a
+relationship predates an offering.
 
 An investor portal is a **second identity class**, not a permission level. LPs
 are external, see only their own commitments and documents, and must never

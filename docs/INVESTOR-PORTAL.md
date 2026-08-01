@@ -14,45 +14,65 @@ site. Screenshots from behind their login are still to come; the sections marked
 **[needs screenshots]** are where they will change the design rather than
 confirm it.
 
-**Confirmed by the user: accredited investors only.** No non-accredited tier,
-no Reg CF/A+ crowdfunding path, no "investor sophistication" carve-out to model.
-That removes an entire axis of complexity — `investor_profiles.status` and the
-onboarding flow only ever deal with one population, and the portal never has to
-decide what a non-accredited investor is allowed to see. It does **not** by
-itself answer 506(b) vs 506(c) (question 1 below still stands): accredited-only
-is the *population*, 506(b)/(c) is *how solicitation and verification work*
-for that population, and Florida Funders' own self-accreditation model is
-506(b)-shaped. Proceeding on that assumption unless told otherwise.
+**Three decisions confirmed by the user:**
 
-## The constraint that dictates the architecture
+1. **Accredited investors only, today.** No non-accredited tier, no Reg CF/A+
+   crowdfunding path active. But the investor-type model must **not** hard-code
+   this — see "Investor categories are extensible" below. What is inactive today
+   is a disabled row, not an assumption baked into a schema or an enum.
+2. **Self-certifying.** This settles 506(b) vs 506(c) on its own: 506(c) legally
+   *requires* verified accreditation, and self-certification does not satisfy
+   it. So the offering exemption is **506(b)**, and `accreditation_method`
+   defaults to `self_certified` with no verification vendor to integrate in v1.
+   The field stays multi-valued (see the schema below) because a future
+   investor category — a qualified purchaser for a 3(c)(7) vehicle, say — may
+   need real verification even while the general population self-certifies.
+3. **The public site will never show an offering. Full stop — not a 506(b)
+   consequence that would loosen under 506(c), a permanent product decision.**
+   This is simpler to build than a conditional rule, and it is enforced
+   structurally, not just by a permission check — see below.
 
-**506(b) prohibits general solicitation.** Offerings cannot be advertised
-publicly, and may only be shown to investors with a pre-existing substantive
-relationship with the sponsor. That is not a compliance footnote to add later —
-it decides what the software is allowed to render to whom:
+## The wall between the public site and the portal
+
+Offerings live only behind the gate. This is not framed as "506(b) requires it
+today" — it is a standing rule of the product, independent of exemption type,
+and it must survive even if the firm later qualifies for 506(c) solicitation.
 
 | Surface | May contain | Must not contain |
 |---|---|---|
-| Public site | Who the firm is, thesis, team, past portfolio, "register interest" | Any live offering, terms, allocation, or deal-specific material |
-| Gated portal | Live offerings, terms, documents, allocations | — visible only to investors who are qualified **and** related |
+| Public site | Who the firm is, thesis, team, past portfolio, "register interest" | **Any offering, ever** — no terms, no allocation, no deal-specific material, no exceptions |
+| Gated portal | Live offerings, terms, documents, allocations | — visible only to investors who are qualified **and** granted |
 
-Two consequences worth building in rather than retrofitting:
+Because "never" is easy to state and easy to violate by accident (a shared
+component, a careless join, a debug endpoint), it gets the same structural
+treatment as R6's "core must never mention a fund":
 
-1. **The relationship must be evidenced and dated.** The questionnaire is not
-   only classification — completing it, and the interactions preceding it, are
-   part of the record establishing that the relationship predates the offering.
-   The platform already has a dated interaction log; this makes it load-bearing.
-2. **Qualification state gates rendering, not just navigation.** An offering is
-   withheld at the query layer, never merely hidden in the UI.
+- **The public site is a separate codebase surface with no import path to
+  `offerings`, `offering_grants`, or anything in `modules/investor_portal`
+  that touches them.** Not a permission check the public router happens to
+  pass — the code to query an offering is simply unreachable from that
+  process.
+- A tokenized test (the same technique as `test_core_never_mentions_a_fund`)
+  asserts the public-site package contains no reference to `offerings`
+  identifiers. A permission bug can be exploited; an import that does not
+  exist cannot be.
+- The portal itself withholds an offering at the **query layer** (the
+  visibility predicate), never merely by hiding a link in the UI.
 
-If the firm ever moves to **506(c)**, general solicitation becomes permissible
-but accreditation must be **verified** rather than self-certified — a different
-`verification_method` and evidence requirement, not a different architecture.
-Both are modelled from the start.
+Two consequences from the interaction-log design that still apply and are worth
+building in rather than retrofitting:
 
-*Not legal advice.* The design should be reviewed by the firm's securities
-counsel before launch, and the rules above encoded as configuration rather than
-assumptions baked into code.
+1. **The relationship must be evidenced and dated**, even though solicitation
+   restrictions are now a product choice rather than only a legal floor. The
+   questionnaire, and the interactions preceding it, remain part of the record
+   of when a relationship began.
+2. **Qualification state gates rendering, not just navigation** — restated
+   above as a structural rule rather than a policy.
+
+*Not legal advice.* The design should still be reviewed by the firm's
+securities counsel before launch. "Self-certifying, 506(b), never public" is
+the assumption this document builds on; if any of the three changes, this
+section is what to revisit first.
 
 ## Investors are still not an entity type
 
@@ -70,10 +90,13 @@ One record, three roles, one history.
 Core stays domain-neutral (R6). The portal is a module, like `funds`.
 
 ```
+investor_categories(id, org_id, key, label, requires_verification,
+                    is_enabled, sort_order)
+
 investor_profiles(id, org_id, subject_type, subject_id,
-                  status, tier, accreditation_method, accredited_at,
-                  accreditation_expires_at, verified_by, relationship_since,
-                  min_check, max_check, custom)
+                  category_id, status, tier, accreditation_method,
+                  accredited_at, accreditation_expires_at, verified_by,
+                  relationship_since, min_check, max_check, custom)
 
 questionnaires(id, org_id, name, version, schema jsonb, published_at, retired_at)
 
@@ -98,6 +121,34 @@ offering_grants(id, org_id, offering_id, subject_type, subject_id,
 questionnaire_complete | self_accredited | verified | active | lapsed |
 declined`. `tier` maps to the firm's pathways (fund / select / network), which
 is how one platform serves all three without branching per tier in code.
+
+### Investor categories are extensible, not a code enum
+
+Three distinct dimensions, easy to conflate and kept apart on purpose:
+
+| Dimension | Answers | Where it lives |
+|---|---|---|
+| **Category** | What kind of investor, legally/regulatorily — accredited individual, accredited entity, qualified purchaser, qualified client, institutional, non-accredited | `investor_categories`, admin-configurable |
+| **Tier** | Which of the firm's pathways they invest through — fund / select / network | `investor_profiles.tier` |
+| **Mandate** | What they want to invest in — the questionnaire | `investor_mandates` |
+
+`investor_categories` follows the same pattern as `core.custom_fields`: a
+reference table an admin can extend, not a `CHECK` constraint baked into the
+schema. Seeded at install with `accredited_individual` and `accredited_entity`
+**enabled**, and `qualified_purchaser`, `qualified_client`, `institutional`,
+`non_accredited` present but `is_enabled = false`. Turning one on later — to
+run a 3(c)(7) vehicle that needs qualified purchasers, say, or to add a Reg CF
+tier — is a data change and a UI toggle, never a migration or a code release.
+
+`requires_verification` is per-category, which is what lets the platform be
+self-certifying **today** without hard-coding that as the only path: a category
+enabled later can require `accreditation_method = 'verified'` while
+`accredited_individual` keeps self-certifying, with no schema change either
+time.
+
+The onboarding flow and the questionnaire only ever present **enabled**
+categories, so nothing changes in what an investor sees until the firm
+deliberately turns a category on.
 
 ### Why questionnaires are versioned
 
@@ -152,12 +203,12 @@ Matching runs both directions off the same predicate:
 - *Which investors fit this offering?* — for the raise.
 - *Which offerings should this investor see?* — for the portal.
 
-A match is a **ranking and a suggestion**, never an automatic grant. Under
-506(b) the decision to show an offering to a specific investor is a judgment the
-firm makes, so the system proposes and a human grants — recorded in
-`offering_grants` with who granted it and why. That is the same
-`proposed_changes` discipline already in the platform, and here it is also the
-audit trail.
+A match is a **ranking and a suggestion**, never an automatic grant — matching
+does not, on its own, decide who sees an offering. The decision is a human
+judgment the firm makes, recorded in `offering_grants` with who granted it and
+why. That is the same `proposed_changes` discipline already in the platform,
+and here it is also the audit trail. It holds regardless of exemption type; it
+is not conditioned on 506(b) specifically.
 
 ## External identity — the decision, now made
 
@@ -185,7 +236,7 @@ decision landing:
 Small, and mostly static: who the firm is, thesis, team, portfolio (past
 investments are not an offering), news, and a **register interest** form that
 creates a `prospect` and sends the questionnaire. No offering data, no terms, no
-allocations.
+allocations — enforced structurally (see "The wall" above), not by a checklist.
 
 It shares `tokens.css` with the app — same visual family, and the design system
 already exists.
@@ -210,19 +261,31 @@ stopped moving.
 Sequencing note: **M9a is worth doing early regardless**, because classifying
 existing investors is useful to the internal CRM on its own, and the
 questionnaire data is what M9b's matching needs to be worth building.
+`investor_categories` is seeded as part of M9a, so the extensibility exists from
+the first migration even though only two categories start enabled.
+
+## Confirmed
+
+- **Accredited investors only, today** — modeled as an extensible category
+  registry, not an assumption in code. See "Investor categories are
+  extensible."
+- **Self-certifying** — which settles the exemption as **506(b)**, since 506(c)
+  requires verified accreditation. `accreditation_method` defaults to
+  `self_certified`; no verification vendor in v1.
+- **The public site never shows an offering** — a permanent product rule,
+  enforced structurally (no import path from the public site to offering data),
+  not merely a 506(b)-era policy that would loosen under 506(c).
 
 ## Open questions for John
 
-1. **506(b) or 506(c)?** Population is confirmed as accredited-only; this is
-   about mechanism, not population. It decides whether the public site may
-   mention live offerings at all, and whether self-accreditation is sufficient
-   or verification is required.
-2. **Who verifies accreditation** — self-certification, a third-party service,
-   or documents reviewed in-house? This sets the evidence the portal must store.
-3. **Are the three pathways separate legal entities**, or tiers within one? It
+1. **Are the three pathways separate legal entities**, or tiers within one? It
    changes whether `tier` is a field or a set of `funds` rows.
-4. **Does the portal need e-signature and subscription documents in v1**, or is
+2. **Does the portal need e-signature and subscription documents in v1**, or is
    the first version read-only with commitments handled offline?
-5. **Is the questionnaire self-serve, or filled in by the team on a call?**
+3. **Is the questionnaire self-serve, or filled in by the team on a call?**
    The former needs the external identity class first; the latter can ship
    inside the internal app immediately.
+4. **Any near-term plan to enable a second investor category** — a qualified
+   purchaser tier, an institutional tier, eventually Reg CF? Nothing blocks on
+   the answer since the registry supports it either way, but it affects what
+   `requires_verification` defaults should be seeded with.
