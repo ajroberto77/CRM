@@ -214,6 +214,222 @@ TABLES: dict[str, dict[str, str]] = {
         "created_at": _CREATED,
     },
 
+    # ── Records ──────────────────────────────────────────────────────────
+    # Every record entity shares a spine: org_id, owner_id (what the own/team
+    # visibility predicate reads), custom jsonb, updated_at (optimistic
+    # concurrency), and timestamps. registry.verify() refuses to start if a
+    # registered entity is missing any of them -- `visibility_predicate`
+    # hardcodes `owner_id`, so an entity without it produces invalid SQL only
+    # when a non-admin queries it, which no test using the admin fixture sees.
+
+    # Declared before core.deals: _ensure_table() creates in insertion order and
+    # the FK points backwards.
+    "core.pipelines": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "name": "text NOT NULL DEFAULT ''",
+        "stages": "jsonb NOT NULL DEFAULT '[]'::jsonb",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    "core.organizations": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "name": "text NOT NULL DEFAULT ''",
+        "name_normalized": "text NOT NULL DEFAULT ''",
+        "domain": "text NOT NULL DEFAULT ''",
+        "description": "text NOT NULL DEFAULT ''",
+        # Marks entities the firm itself controls (its own funds and vehicles),
+        # so the vertical can tell "our fund" from "another GP's fund" without
+        # core knowing what a fund is.
+        "is_internal": "boolean NOT NULL DEFAULT false",
+        "source": (
+            "text NOT NULL DEFAULT 'human' "
+            "CHECK (source IN ('human','derived','import','sync','ai'))"
+        ),
+        "is_derived": "boolean NOT NULL DEFAULT false",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    "core.persons": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "full_name": "text NOT NULL DEFAULT ''",
+        "name_normalized": "text NOT NULL DEFAULT ''",
+        "title": "text NOT NULL DEFAULT ''",
+        # Display denormalization only. contact_channels (M2) is the matching
+        # surface; never match on this column.
+        "primary_email": "text NOT NULL DEFAULT ''",
+        "description": "text NOT NULL DEFAULT ''",
+        "source": (
+            "text NOT NULL DEFAULT 'human' "
+            "CHECK (source IN ('human','derived','import','sync','ai'))"
+        ),
+        "is_derived": "boolean NOT NULL DEFAULT false",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    "core.deals": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "name": "text NOT NULL DEFAULT ''",
+        "pipeline_id": "uuid REFERENCES core.pipelines(id) ON DELETE SET NULL",
+        "stage": "text NOT NULL DEFAULT ''",
+        "amount": "numeric(18,2)",
+        "currency": "text NOT NULL DEFAULT 'USD'",
+        "expected_close_on": "date",
+        "status": (
+            "text NOT NULL DEFAULT 'open' CHECK (status IN ('open','won','lost'))"
+        ),
+        # Deal rotting reads this. A real column, not JSONB: high-churn derived
+        # data, and a JSONB update rewrites the whole value under a row lock.
+        "last_activity_at": "timestamptz",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    "core.tasks": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "title": "text NOT NULL DEFAULT ''",
+        "body": "text NOT NULL DEFAULT ''",
+        "due_on": "date",
+        "status": (
+            "text NOT NULL DEFAULT 'open' CHECK (status IN ('open','done','cancelled'))"
+        ),
+        "subject_type": "text NOT NULL DEFAULT ''",
+        "subject_id": "uuid",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    "core.notes": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "body": "text NOT NULL DEFAULT ''",
+        "subject_type": "text NOT NULL DEFAULT ''",
+        "subject_id": "uuid",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    # Dated, role-bearing relationships. This one table is why there is no
+    # investors table, no portfolio_companies table, no employments table and no
+    # co_investors table -- see docs/VERTICAL-ASSET-MANAGEMENT.md.
+    #
+    # ONE row per relationship, queried from both ends through
+    # core.association_edges. Storing both directions doubles every write and
+    # the copies drift the first time one is edited.
+    #
+    # No owner_id, deliberately: an association is not a permission subject.
+    # Access is derived -- readable iff both endpoints are readable -- so it is
+    # never passed to visibility_predicate(), which would emit a predicate on a
+    # column that does not exist here.
+    "core.associations": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "from_type": "text NOT NULL DEFAULT ''",
+        "from_id": "uuid NOT NULL",
+        "to_type": "text NOT NULL DEFAULT ''",
+        "to_id": "uuid NOT NULL",
+        "role": "text NOT NULL DEFAULT ''",
+        "attributes": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "valid_from": "date",
+        "valid_to": "date",
+        "created_at": _CREATED,
+        "created_by": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "updated_at": _CREATED,
+    },
+
+    # User-defined fields. `key` is constrained at the application layer to
+    # ^[a-z][a-z0-9_]{0,48}$ -- these keys reach SQL as index names and as bound
+    # JSONB paths, and a key like `x' OR '1'='1` would be a stored injection
+    # that never looks like a request parameter.
+    "core.custom_fields": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "entity": "text NOT NULL DEFAULT ''",
+        "key": "text NOT NULL DEFAULT ''",
+        "label": "text NOT NULL DEFAULT ''",
+        "kind": (
+            "text NOT NULL DEFAULT 'text' "
+            "CHECK (kind IN ('text','number','date','datetime','boolean',"
+            "'select','multiselect','currency','url','email','phone'))"
+        ),
+        "options": "jsonb NOT NULL DEFAULT '[]'::jsonb",
+        "indexed": "boolean NOT NULL DEFAULT false",
+        "index_name": "text NOT NULL DEFAULT ''",
+        "index_state": (
+            "text NOT NULL DEFAULT 'none' "
+            "CHECK (index_state IN ('none','pending','building','active','invalid','failed','retiring'))"
+        ),
+        "index_error": "text NOT NULL DEFAULT ''",
+        "archived_at": "timestamptz",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    "core.saved_views": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "entity": "text NOT NULL DEFAULT ''",
+        "name": "text NOT NULL DEFAULT ''",
+        "kind": (
+            "text NOT NULL DEFAULT 'table' CHECK (kind IN ('table','board','calendar'))"
+        ),
+        # Stored filter JSON, recompiled and re-permission-checked on every
+        # execution by the executing user. Never cached as SQL: a view saved by
+        # an admin must not read a masked field for a member.
+        "filters": "jsonb NOT NULL DEFAULT '[]'::jsonb",
+        "sort": "jsonb NOT NULL DEFAULT '[]'::jsonb",
+        "columns": "jsonb NOT NULL DEFAULT '[]'::jsonb",
+        "group_by": "text NOT NULL DEFAULT ''",
+        "is_shared": "boolean NOT NULL DEFAULT true",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    # The transactional outbox. Written INSIDE the repository's transaction, so
+    # a record write and the event describing it commit or roll back together;
+    # dispatched after commit. This is what makes an M5 subscriber that enqueues
+    # a job or sends a message correct rather than best-effort.
+    "core.events": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "seq": "bigserial",
+        "occurred_at": _CREATED,
+        "entity": "text NOT NULL DEFAULT ''",
+        "record_id": "uuid",
+        "action": "text NOT NULL DEFAULT ''",
+        "actor_user_id": "uuid",
+        "actor_kind": "text NOT NULL DEFAULT 'user'",
+        "diff": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "caused_by_event_id": "uuid",
+        "delivery_state": (
+            "text NOT NULL DEFAULT 'pending' "
+            "CHECK (delivery_state IN ('pending','delivered','failed'))"
+        ),
+        "attempts": "integer NOT NULL DEFAULT 0",
+        "last_error": "text NOT NULL DEFAULT ''",
+    },
+
     "core.user_roles": {
         "id": _UUID_PK,
         "org_id": _ORG_FK,
@@ -236,6 +452,90 @@ INDEXES: tuple[str, ...] = (
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_token ON auth.sessions (token_hash)",
     "CREATE INDEX IF NOT EXISTS ix_sessions_org_user "
     "ON auth.sessions (org_id, user_id, expires_at DESC)",
+
+    # ── Record entities ──────────────────────────────────────────────────
+    # Default list order is (updated_at DESC, id DESC): `id` is always appended
+    # so the sort is a total order. Without it, keyset pagination silently
+    # duplicates and skips rows, which reads as a data bug rather than a paging
+    # bug.
+    "CREATE INDEX IF NOT EXISTS ix_organizations_org_updated "
+    "ON core.organizations (org_id, updated_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_organizations_org_owner "
+    "ON core.organizations (org_id, owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_organizations_org_name "
+    "ON core.organizations (org_id, name_normalized)",
+    "CREATE INDEX IF NOT EXISTS ix_organizations_org_domain "
+    "ON core.organizations (org_id, domain) WHERE domain <> ''",
+
+    "CREATE INDEX IF NOT EXISTS ix_persons_org_updated "
+    "ON core.persons (org_id, updated_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_persons_org_owner ON core.persons (org_id, owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_persons_org_name "
+    "ON core.persons (org_id, name_normalized)",
+
+    "CREATE INDEX IF NOT EXISTS ix_pipelines_org_updated "
+    "ON core.pipelines (org_id, updated_at DESC, id DESC)",
+
+    "CREATE INDEX IF NOT EXISTS ix_deals_org_updated "
+    "ON core.deals (org_id, updated_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_deals_org_owner ON core.deals (org_id, owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_deals_org_stage "
+    "ON core.deals (org_id, pipeline_id, stage)",
+
+    "CREATE INDEX IF NOT EXISTS ix_tasks_org_updated "
+    "ON core.tasks (org_id, updated_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_tasks_org_owner_status "
+    "ON core.tasks (org_id, owner_id, status, due_on)",
+    "CREATE INDEX IF NOT EXISTS ix_tasks_org_subject "
+    "ON core.tasks (org_id, subject_type, subject_id)",
+
+    "CREATE INDEX IF NOT EXISTS ix_notes_org_updated "
+    "ON core.notes (org_id, updated_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_notes_org_subject "
+    "ON core.notes (org_id, subject_type, subject_id)",
+
+    # Both directions are indexed because the edge is stored once and read from
+    # either end. The partial index serves the common "current relationships"
+    # case without scanning history.
+    "CREATE INDEX IF NOT EXISTS ix_assoc_from "
+    "ON core.associations (org_id, from_type, from_id, role)",
+    "CREATE INDEX IF NOT EXISTS ix_assoc_to "
+    "ON core.associations (org_id, to_type, to_id, role)",
+    "CREATE INDEX IF NOT EXISTS ix_assoc_from_current "
+    "ON core.associations (org_id, from_type, from_id, role) WHERE valid_to IS NULL",
+    # COALESCE on valid_from lets the same pair hold successive stints (two
+    # separate employments) while still rejecting an exact duplicate.
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_assoc ON core.associations "
+    "(org_id, from_type, from_id, role, to_type, to_id, "
+    " COALESCE(valid_from, '-infinity'::date))",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_custom_fields "
+    "ON core.custom_fields (org_id, entity, key) WHERE archived_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS ix_custom_fields_pending "
+    "ON core.custom_fields (org_id, index_state) WHERE index_state <> 'none'",
+
+    "CREATE INDEX IF NOT EXISTS ix_saved_views_org_entity "
+    "ON core.saved_views (org_id, entity, name)",
+
+    "CREATE INDEX IF NOT EXISTS ix_events_org_record "
+    "ON core.events (org_id, entity, record_id, seq DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_events_undelivered "
+    "ON core.events (org_id, seq) WHERE delivery_state = 'pending'",
+
+    # Containment and equality over custom fields. Range queries need a
+    # promoted expression index instead -- see server/core/custom_fields.py.
+    # Single-column, so verify_index_leading_org() (which inspects indnatts > 1)
+    # correctly ignores these.
+    "CREATE INDEX IF NOT EXISTS ix_organizations_custom_gin "
+    "ON core.organizations USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_persons_custom_gin "
+    "ON core.persons USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_deals_custom_gin "
+    "ON core.deals USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_tasks_custom_gin "
+    "ON core.tasks USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_notes_custom_gin "
+    "ON core.notes USING gin (custom jsonb_path_ops)",
 
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_orgs_slug ON core.orgs (slug) WHERE slug <> ''",
 
@@ -273,6 +573,90 @@ RLS_PREDICATES: dict[str, str] = {
         if name != "core.orgs" and name not in UNSCOPED_TABLES
     },
 }
+
+
+# ── Cast helpers for custom-field indexes ────────────────────────────────────
+#
+# A raw `((custom->>'renewal')::date)` expression index is a multi-tenant
+# landmine. The index is on the whole table, so once org A promotes `renewal` as
+# a date, org B storing "whenever" in a key of the same name makes **org B's
+# INSERT fail outright** -- one tenant's schema choice takes another tenant's
+# writes down, and the error names a cast nobody in org B has heard of.
+#
+# These helpers degrade an unparseable value to NULL instead. They must be
+# IMMUTABLE to be indexable, which `pg_input_is_valid()` (PG16+) allows without
+# an exception block -- a plpgsql BEGIN/EXCEPTION function cannot be IMMUTABLE
+# in a way the planner will trust for an index.
+#
+# server/core/query.py builds ORDER BY and WHERE from these same functions, so
+# the filter expression is textually identical to the index expression. That is
+# the only reason a promoted index actually gets used.
+#
+# NOT a validation path: `to_date('2026-13-45','YYYY-MM-DD')` silently returns
+# 2027-02-14 rather than raising. Type validation is the repository's job, where
+# a ValueError triggers the same repair-retry as everywhere else (safety rule 6).
+FUNCTIONS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE FUNCTION core.jsonb_num(j jsonb, k text) RETURNS numeric
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $fn$
+      SELECT CASE WHEN pg_input_is_valid(j ->> k, 'numeric')
+                  THEN (j ->> k)::numeric END
+    $fn$
+    """,
+    """
+    CREATE OR REPLACE FUNCTION core.jsonb_date(j jsonb, k text) RETURNS date
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $fn$
+      SELECT CASE WHEN pg_input_is_valid(j ->> k, 'date')
+                  THEN (j ->> k)::date END
+    $fn$
+    """,
+    """
+    CREATE OR REPLACE FUNCTION core.jsonb_ts(j jsonb, k text) RETURNS timestamptz
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $fn$
+      SELECT CASE WHEN pg_input_is_valid(j ->> k, 'timestamptz')
+                  THEN (j ->> k)::timestamptz END
+    $fn$
+    """,
+    """
+    CREATE OR REPLACE FUNCTION core.jsonb_bool(j jsonb, k text) RETURNS boolean
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $fn$
+      SELECT CASE WHEN pg_input_is_valid(j ->> k, 'boolean')
+                  THEN (j ->> k)::boolean END
+    $fn$
+    """,
+    """
+    CREATE OR REPLACE FUNCTION core.jsonb_text(j jsonb, k text) RETURNS text
+    LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $fn$
+      SELECT j ->> k
+    $fn$
+    """,
+)
+
+# ── Views ────────────────────────────────────────────────────────────────────
+#
+# One stored row per relationship, readable from both ends. `security_invoker`
+# is load-bearing: a view runs as its OWNER by default, which is the classic way
+# an RLS boundary gets bypassed. FORCE ROW LEVEL SECURITY on the base table
+# happens to save us here, but relying on that is an accident rather than a
+# design -- so the invoker semantics are stated, and tests/test_rls.py asserts a
+# second org sees zero rows through the view.
+#
+# The self-loop exclusion on the second branch is the only thing stopping a
+# person-to-person association from being counted twice.
+VIEWS: tuple[str, ...] = (
+    """
+    CREATE OR REPLACE VIEW core.association_edges WITH (security_invoker = true) AS
+    SELECT id, org_id, from_type AS self_type, from_id AS self_id,
+           to_type AS other_type, to_id AS other_id, role, 'out'::text AS direction,
+           attributes, valid_from, valid_to, created_at
+      FROM core.associations
+    UNION ALL
+    SELECT id, org_id, to_type, to_id, from_type, from_id, role, 'in'::text,
+           attributes, valid_from, valid_to, created_at
+      FROM core.associations
+     WHERE NOT (from_type = to_type AND from_id = to_id)
+    """,
+)
 
 
 # ── Migration ────────────────────────────────────────────────────────────────
@@ -318,9 +702,15 @@ def migrate(*, tables: Optional[Iterable[str]] = None) -> None:
     wanted = list(tables) if tables is not None else list(TABLES)
     with pool.system_transaction() as cur:
         _ensure_schemas(cur)
+        # Functions precede indexes: the promoted custom-field indexes in
+        # server/core/custom_fields.py are expressions over them.
+        for statement in FUNCTIONS:
+            cur.execute(statement)
         for table in wanted:
             _ensure_table(cur, table, TABLES[table])
         for statement in INDEXES:
+            cur.execute(statement)
+        for statement in VIEWS:
             cur.execute(statement)
         for table in wanted:
             if table in UNSCOPED_TABLES:

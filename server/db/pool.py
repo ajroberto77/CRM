@@ -159,6 +159,47 @@ def system_transaction() -> Iterator[psycopg2.extensions.cursor]:
             cur.close()
 
 
+@contextmanager
+def ddl_connection(
+    *,
+    lock_timeout_ms: int = 3000,
+    statement_timeout_ms: int = 0,
+) -> Iterator[psycopg2.extensions.cursor]:
+    """An AUTOCOMMIT connection, for `CREATE/DROP INDEX CONCURRENTLY` only.
+
+    This exists because `CONCURRENTLY` cannot run inside a transaction block,
+    and both `transaction()` and `system_transaction()` open one. It is not a
+    second pool (R5) -- it borrows from the same one and restores the
+    connection's isolation level on the way out.
+
+    `lock_timeout` matters more than it looks. `CREATE INDEX CONCURRENTLY` does
+    two table scans and then waits for every concurrent transaction to drain; a
+    single `idle in transaction` connection stalls it indefinitely. A timeout
+    turns that into a recorded failure the promoter can retry, rather than a
+    hung worker nobody notices.
+
+    `statement_timeout` defaults to 0 (off) because a legitimate index build on
+    a large table can take minutes and must not be killed halfway -- a failed
+    CONCURRENTLY build leaves an INVALID index behind.
+    """
+    with _borrow() as conn:
+        previous = conn.isolation_level
+        conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        try:
+            cur.execute(f"SET lock_timeout = {int(lock_timeout_ms)}")
+            cur.execute(f"SET statement_timeout = {int(statement_timeout_ms)}")
+            yield cur
+        finally:
+            try:
+                cur.execute("SET lock_timeout = DEFAULT")
+                cur.execute("SET statement_timeout = DEFAULT")
+            except psycopg2.Error:
+                pass  # a dead connection is about to be discarded anyway
+            cur.close()
+            conn.set_isolation_level(previous)
+
+
 def current_context(cur: psycopg2.extensions.cursor) -> dict[str, Any]:
     """The tenant context actually in force on this cursor. Used by tests and
     by the RLS assertions; reads the GUCs rather than trusting the caller's
@@ -172,6 +213,14 @@ def current_context(cur: psycopg2.extensions.cursor) -> dict[str, Any]:
     return {"org_id": row.get("org_id") or None, "user_id": row.get("user_id") or None}
 
 
+# Features this codebase depends on and the version that provides them:
+#   15 -- security_invoker views (core.association_edges must not bypass RLS)
+#   16 -- pg_input_is_valid(), for IMMUTABLE cast helpers with no exception block
+# Asserted at startup rather than discovered when a view silently returns
+# another tenant's rows.
+MIN_SERVER_VERSION = 160000
+
+
 def healthcheck() -> dict[str, Any]:
     """Liveness for GET /health. Reports whether the app role is dangerously
     privileged -- an app role with BYPASSRLS or superuser silently defeats every
@@ -180,9 +229,11 @@ def healthcheck() -> dict[str, Any]:
         cur.execute(
             "SELECT current_database() AS database, current_user AS role, "
             "       version() AS server_version, "
+            "       current_setting('server_version_num')::int AS server_version_num, "
             "       (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) AS is_superuser, "
             "       (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypasses_rls"
         )
         row = dict(cur.fetchone())
     row["rls_enforced"] = not (row.get("is_superuser") or row.get("bypasses_rls"))
+    row["version_supported"] = row["server_version_num"] >= MIN_SERVER_VERSION
     return row
