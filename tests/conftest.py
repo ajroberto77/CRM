@@ -49,13 +49,27 @@ def _migrated() -> None:
     registry.reset()
     schema.reset_module_schema()
     registry.register_core_entities()
-    # The vertical installs exactly as a deployment would: one call, no core
-    # changes. Its tables reach the migration through register_module_schema().
+    # Every module installs exactly as a deployment would: one call, no core
+    # changes. funds' tables reach the migration through
+    # register_module_schema(); investor_portal owns no tables yet (M9a+),
+    # only the write-time gate on commitment closing.
     import modules.funds
+    import modules.investor_portal
     modules.funds.install()
+    modules.investor_portal.install()
     schema.migrate()
     yield
     pool.close_pool()
+
+
+@pytest.fixture(autouse=True)
+def _no_leftover_validators():
+    """Validators are global, like events subscribers -- but unlike
+    subscribers, some are installed once per session by a module and must
+    survive every test, so a blanket reset would delete them permanently."""
+    snapshot = registry.validator_snapshot()
+    yield
+    registry.restore_validators(snapshot)
 
 
 @pytest.fixture(autouse=True)

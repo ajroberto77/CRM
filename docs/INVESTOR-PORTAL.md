@@ -357,31 +357,56 @@ gated portal. The portal, once it exists, upgrades the experience — a
 "documents" tab with live status instead of an email thread — but is not on the
 critical path for e-signature to work at all.
 
-### The gate this needs, and the mechanism M1 does not have yet
+### The gate — built
 
-The rule the firm will want is straightforward to state and not yet
-mechanically enforceable in the current repository: **a commitment should not
-reach `status = 'closed'` without an executed subscription document.**
+**A commitment cannot reach `status = 'closed'` without an executed
+subscription document.** M1's event bus could not enforce this — its
+subscribers run *after* commit and cannot roll a write back, by design (see
+`server/core/events.py`'s docstring). The gate needs to run *inside* the
+write, before commit, and be able to abort it.
 
-M1's event bus (`server/core/events.py`) cannot enforce this — its subscribers
-run *after* commit and cannot roll a write back, by design (see that module's
-docstring). A gate has to run *inside* the write, before commit, which
-`repository.py` does not yet expose a hook for. The needed addition, when this
-phase is built:
+`server/core/registry.py` now has that mechanism:
 
-```
-registry.register_validator(entity: str, fn: Callable[[Principal, dict, dict], None])
+```python
+registry.register_validator(entity_name, fn, *, actions=(...), order=100)
 ```
 
-called synchronously inside `repository.update()`'s transaction, before
-commit, raising to abort the write — the same "raise, never no-op" discipline
-every other gate in this platform already follows. Core calls whatever
-validators are registered for an entity without knowing what they check, so
-`modules/investor_portal` can register "commitment closing requires an executed
-subscription document" without `repository.py` ever mentioning a commitment or
-a document. This is a small, generic addition to the M1 repository — not
-specific to e-signature — and is worth building the first time *any* module
-needs a real write-time business rule, which this is.
+`fn` receives a `ValidationContext` (`principal`, `entity`, `action`,
+`record_id`, `before`, `after` — `after` is the real, fully-written row, not a
+hand-rolled guess) and raises to abort. `server/core/repository.py` calls
+every registered validator for an entity/action **after the row is written,
+still inside the transaction** — so raising rolls back cleanly, and `after`
+reflects defaults and normalization exactly as they would be stored. Core
+calls whatever validators are registered without knowing what they check, so
+this gate lives entirely in `modules/investor_portal/manifest.py` — neither
+`repository.py` nor `modules/funds` mentions a commitment or a document.
+
+`core.documents`, `core.document_signers` and `server/providers/esign.py`
+(the dispatcher for all four vendors — DocuSign, Dropbox Sign, PandaDoc, Adobe
+Sign, none chosen as default) are built alongside it, ahead of the rest of
+M9d, specifically so this gate has something real to check: it looks for a
+`document` row with `subject_type='commitment'`, `subject_id=<the
+commitment>`, `kind='subscription_agreement'`, `status='executed'`. 34 new
+tests cover the generic mechanism (order, action-scoping, rollback-on-raise,
+before/after correctness), the gate itself (missing document, wrong kind,
+wrong subject, the executed case, and that it only fires on the transition
+*into* closed), the dispatcher (unknown provider, unconfigured provider,
+retry-on-429, no-retry-on-409), and DocuSign's JWT construction — the
+signature is verified against the key's own public half, not just asserted to
+exist.
+
+Each adapter is written from the vendor's current REST documentation and
+carries the same "never live-tested" caveat Cal's own `microsoft_calendar.py`
+carries for its unverified timezone handling — confirm each against a real
+sandbox account before enabling it unattended. Per-vendor notes worth knowing
+before that: DocuSign needs an RSA keypair and JWT consent per impersonated
+user (a new, narrow `cryptography` dependency, chosen over hand-rolling
+RS256 signing in stdlib); Dropbox Sign has no separate sandbox host, only a
+`test_mode` flag that still fires real webhooks; PandaDoc needs two calls with
+a wait for `draft` status in between, and its completed-document download
+endpoint 401s on a sandbox key; Adobe Sign's base URL is shard-discovered per
+account and its exact "declined" status representation is the one thing the
+research could not fully confirm from documentation alone.
 
 ## What the public site is
 
@@ -400,16 +425,15 @@ what the investor's own dashboard reports. Those will change this design.
 ## Where this sits in the plan
 
 A new milestone, after the internal product is usable. It depends on
-`modules/funds` (M1, done), `core.documents` and the `esign` dispatcher (M2),
-the approval queue (M5), and the external-identity work is best done once the
-internal permission model has stopped moving.
+`modules/funds` (M1, done), the approval queue (M5), and the external-identity
+work is best done once the internal permission model has stopped moving.
 
-| Phase | Delivers |
-|---|---|
-| **M9a** | `investor_profiles`, `investor_categories`, `investment_pathways` + `pathway_vehicles`, questionnaires with versioned responses, mandates, and the internal UI to review and correct a classification |
-| **M9b** | Matching in both directions, plus `offerings` and human-granted `offering_grants` |
-| **M9c** | External identity class, the self-serve questionnaire delivered through the gated portal, and the public marketing site |
-| **M9d** | Subscription-document generation and e-signature: `core.document_templates`/`document_signers`, the `esign` provider dispatch, and the commitment-closing gate |
+| Phase | Delivers | Status |
+|---|---|---|
+| **M9a** | `investor_profiles`, `investor_categories`, `investment_pathways` + `pathway_vehicles`, questionnaires with versioned responses, mandates, and the internal UI to review and correct a classification | Not started |
+| **M9b** | Matching in both directions, plus `offerings` and human-granted `offering_grants` | Not started |
+| **M9c** | External identity class, the self-serve questionnaire delivered through the gated portal, and the public marketing site | Not started |
+| **M9d** | `core.documents`/`document_signers`, the `esign` provider dispatch (all four vendors), and the commitment-closing gate | **Built** — 34 tests, see "The gate — built" above. `document_templates` (merge-field generation from a template) is the one piece of the original M9d scope still deferred; nothing found in `docs/VERTICAL-ASSET-MANAGEMENT.md`'s design needed it to close this gap |
 
 Sequencing note: **M9a is worth doing early regardless**, because classifying
 existing investors is useful to the internal CRM on its own, and the

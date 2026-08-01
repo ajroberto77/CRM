@@ -45,7 +45,7 @@ module, and **no other file may branch on provider identity**.
 | Calendar | `server/providers/calendar.py` | microsoft, google |
 | Contacts | `server/providers/contacts.py` | microsoft, google |
 | Messaging | `server/channels/dispatch.py` | signal, telegram, email |
-| E-signature | `server/providers/esign.py` | provider TBD — see `docs/INVESTOR-PORTAL.md` |
+| E-signature | `server/providers/esign.py` | docusign, dropboxsign, pandadoc, adobesign |
 
 This list grew once, deliberately, when subscription-document e-signature was
 scoped for the investor portal. It is not meant to grow casually — adding a

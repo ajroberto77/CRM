@@ -411,6 +411,59 @@ TABLES: dict[str, dict[str, str]] = {
         "updated_at": _CREATED,
     },
 
+    # Generic, subject-polymorphic document storage -- core, not vertical. A
+    # subscription agreement is a document whose `kind` a module chose to set;
+    # this table has no idea what a commitment is (docs/INVESTOR-PORTAL.md).
+    # `provider`/`provider_envelope_id` are free text rather than an FK or
+    # enum, so a new esign provider (R3's sixth axis) is never a schema change
+    # here -- only a new `<provider>_esign.py` adapter.
+    "core.documents": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "subject_type": "text NOT NULL DEFAULT ''",
+        "subject_id": "uuid",
+        "kind": "text NOT NULL DEFAULT ''",
+        "filename": "text NOT NULL DEFAULT ''",
+        "storage_key": "text NOT NULL DEFAULT ''",
+        "mime": "text NOT NULL DEFAULT ''",
+        "bytes": "bigint",
+        "provider": "text NOT NULL DEFAULT ''",
+        "provider_envelope_id": "text NOT NULL DEFAULT ''",
+        "status": (
+            "text NOT NULL DEFAULT 'draft' "
+            "CHECK (status IN ('draft','sent_for_signature','partially_signed',"
+            "'executed','void','expired'))"
+        ),
+        "valid_from": "date",
+        "valid_until": "date",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    # Per-signer tracking for a document sent for e-signature. Not a registered
+    # entity (no owner_id, no generic CRUD) -- same treatment as
+    # core.associations: internal detail of a workflow, managed by its own
+    # module (server/core/documents.py) rather than through the generic
+    # repository. `role` is free text ('investor', 'gp', 'witness', ...).
+    "core.document_signers": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "document_id": "uuid NOT NULL REFERENCES core.documents(id) ON DELETE CASCADE",
+        "subject_type": "text NOT NULL DEFAULT ''",
+        "subject_id": "uuid",
+        "role": "text NOT NULL DEFAULT ''",
+        "order_index": "integer NOT NULL DEFAULT 0",
+        "status": (
+            "text NOT NULL DEFAULT 'pending' "
+            "CHECK (status IN ('pending','sent','viewed','signed','declined'))"
+        ),
+        "signed_at": "timestamptz",
+        "provider_signer_id": "text NOT NULL DEFAULT ''",
+        "created_at": _CREATED,
+    },
+
     # The transactional outbox. Written INSIDE the repository's transaction, so
     # a record write and the event describing it commit or roll back together;
     # dispatched after commit. This is what makes an M5 subscriber that enqueues
@@ -522,6 +575,23 @@ INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_saved_views_org_entity "
     "ON core.saved_views (org_id, entity, name)",
 
+    # The two queries the closing gate and the general "documents on this
+    # record" view actually run.
+    "CREATE INDEX IF NOT EXISTS ix_documents_org_subject "
+    "ON core.documents (org_id, subject_type, subject_id)",
+    "CREATE INDEX IF NOT EXISTS ix_documents_org_status "
+    "ON core.documents (org_id, status)",
+    "CREATE INDEX IF NOT EXISTS ix_documents_org_updated "
+    "ON core.documents (org_id, updated_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_documents_org_owner "
+    "ON core.documents (org_id, owner_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_documents_provider_envelope "
+    "ON core.documents (org_id, provider, provider_envelope_id) "
+    "WHERE provider_envelope_id <> ''",
+
+    "CREATE INDEX IF NOT EXISTS ix_document_signers_org_document "
+    "ON core.document_signers (org_id, document_id, order_index)",
+
     "CREATE INDEX IF NOT EXISTS ix_events_org_record "
     "ON core.events (org_id, entity, record_id, seq DESC)",
     "CREATE INDEX IF NOT EXISTS ix_events_undelivered "
@@ -541,6 +611,8 @@ INDEXES: tuple[str, ...] = (
     "ON core.tasks USING gin (custom jsonb_path_ops)",
     "CREATE INDEX IF NOT EXISTS ix_notes_custom_gin "
     "ON core.notes USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_documents_custom_gin "
+    "ON core.documents USING gin (custom jsonb_path_ops)",
 
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_orgs_slug ON core.orgs (slug) WHERE slug <> ''",
 

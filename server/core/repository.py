@@ -337,6 +337,8 @@ def create(
         )
         row = dict(cur.fetchone())
 
+        _run_validators(principal, entity, "create", record_id, before=None, after=row)
+
         event = _event(principal, entity, record_id, events.CREATED, after=row)
         event_id = events.record_event(cur, event)
 
@@ -413,6 +415,8 @@ def update(
             raise permissions.PermissionDenied("edit", entity, f"record {record_id}")
         after = dict(row)
 
+        _run_validators(principal, entity, "update", record_id, before=before, after=after)
+
         event = _event(
             principal, entity, record_id, events.UPDATED,
             before=before, after=after, diff=events.diff_of(before, after),
@@ -451,11 +455,57 @@ def delete(principal: Principal, entity: str, record_id: str) -> bool:
             raise permissions.PermissionDenied("delete", entity, f"record {record_id}")
 
         before = dict(row)
+
+        _run_validators(principal, entity, "delete", record_id, before=before, after=None)
+
         event = _event(principal, entity, record_id, events.DELETED, before=before)
         event_id = events.record_event(cur, event)
 
     _publish(event, event_id)
     return True
+
+
+# ── Write-time validators ────────────────────────────────────────────────────
+
+def _run_validators(
+    principal: Principal,
+    entity: str,
+    action: str,
+    record_id: Optional[str],
+    *,
+    before: Optional[dict[str, Any]],
+    after: Optional[dict[str, Any]],
+) -> None:
+    """Run every registered validator for `entity`/`action`, inside the
+    caller's transaction, after the row has been written but before that
+    transaction commits.
+
+    A validator raises to abort. The exception propagates straight out of this
+    function and out of the enclosing `with pool.transaction(...)` block in
+    create/update/delete, which rolls back and re-raises -- there is no
+    try/except here to catch it, deliberately. `registry.py` owns the
+    mechanism (registration, ordering, the `ValidationContext` shape);
+    `repository.py` only calls it at the three points where a row's final
+    state is known.
+
+    A validator that itself calls back into `repository.*` (as
+    `modules/investor_portal`'s commitment gate does, reading `document` rows)
+    borrows a SECOND connection from the pool while the outer write still
+    holds its own -- both are ordinary reads and never touch the same row, so
+    there is no deadlock on locks, only on pool exhaustion if nested calls run
+    deeper than `CRM_DB_POOL_MAX` (default 10) allows concurrently. Fine at
+    today's scale; a validator that fans out to many nested repository calls
+    should be treated as a smell, not a pattern to repeat.
+    """
+    validators = registry.validators_for(entity, action)
+    if not validators:
+        return
+    context = registry.ValidationContext(
+        principal=principal, entity=entity, action=action,
+        record_id=record_id, before=before, after=after,
+    )
+    for validator in validators:
+        validator(context)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

@@ -245,6 +245,17 @@ _SECRET_ENV = {
     "google_oauth_client_secret": "GOOGLE_OAUTH_CLIENT_SECRET",
     "telegram_bot_token": "TELEGRAM_BOT_TOKEN",
     "signal_cli_number": "SIGNAL_CLI_NUMBER",
+    # E-signature (R3's sixth axis). All four vendors left as options -- the
+    # active one is chosen per call (server/providers/esign.py's `provider`
+    # argument, recorded on core.documents.provider), not a single global
+    # default, so nothing here picks a favorite.
+    "docusign_integration_key": "DOCUSIGN_INTEGRATION_KEY",
+    "docusign_user_id": "DOCUSIGN_USER_ID",
+    "docusign_account_id": "DOCUSIGN_ACCOUNT_ID",
+    "docusign_private_key": "DOCUSIGN_PRIVATE_KEY",
+    "dropboxsign_api_key": "DROPBOXSIGN_API_KEY",
+    "pandadoc_api_key": "PANDADOC_API_KEY",
+    "adobesign_integration_key": "ADOBESIGN_INTEGRATION_KEY",
 }
 
 

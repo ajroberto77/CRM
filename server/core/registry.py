@@ -20,7 +20,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional
+
+if TYPE_CHECKING:
+    # Type-only: registry.py stays a foundational module with no runtime
+    # dependency on permissions.py, testable standalone with no database and no
+    # peer imports, exactly like query.py's compiler. Only the type checker
+    # needs the real class.
+    from server.core.permissions import Principal
 
 # Field kinds. Closed vocabulary: the filter compiler indexes its operator table
 # on (kind, operator), and the index promoter picks a cast helper from it.
@@ -177,10 +184,117 @@ def roles() -> list[AssociationRole]:
     return [_ROLES[name] for name in sorted(_ROLES)]
 
 
+# ── Write-time validators ────────────────────────────────────────────────────
+#
+# The gate the event bus (server/core/events.py) cannot give you. Events are a
+# transactional outbox whose subscribers run AFTER commit and cannot block a
+# write -- correct for "notify something," wrong for "a commitment must not
+# close without an executed subscription document." That needs to run INSIDE
+# the write, before it commits, and be able to raise and abort it.
+#
+# A validator is called synchronously, inside repository.create/update/delete's
+# own transaction, after the row has been written (so `after` is the real,
+# fully-resolved row -- defaults, normalization and all, not a hand-rolled
+# guess at what the row will look like) but before that transaction commits.
+# Raising propagates out of repository's `with pool.transaction(...)` block,
+# which rolls back and re-raises -- the same "raise, never no-op" discipline
+# every other gate in this platform follows. There is no way to register a
+# validator that silently swallows a failure; the callable either returns
+# (allow) or raises (abort), nothing in between.
+#
+# Modules register validators through this exact function, the same way they
+# register entities and roles, so `modules/investor_portal` can enforce a rule
+# about `commitment` (a `modules/funds` entity) without `server/core/` or
+# `modules/funds` ever knowing that rule exists (R6).
+
+
+@dataclass(frozen=True)
+class ValidationContext:
+    """What a validator sees. `before`/`after` are plain dicts, already merged
+    with defaults and normalization by the repository -- a validator never
+    re-derives what the write does, only judges the result.
+
+    `before` is None on create. `after` is None on delete. Both are set on
+    update. `record_id` is always set except on a create the validator itself
+    rejects before an id would otherwise matter -- it is always populated in
+    practice, since the id is minted before the row is written.
+    """
+    principal: "Principal"
+    entity: str
+    action: str  # 'create' | 'update' | 'delete'
+    record_id: Optional[str]
+    before: Optional[dict[str, Any]]
+    after: Optional[dict[str, Any]]
+
+
+Validator = Callable[[ValidationContext], None]
+
+
+@dataclass(frozen=True)
+class _RegisteredValidator:
+    entity: str
+    fn: Validator
+    actions: tuple[str, ...]
+    order: int
+    module: str
+
+
+_VALIDATORS: list[_RegisteredValidator] = []
+
+
+def register_validator(
+    entity_name: str,
+    fn: Validator,
+    *,
+    actions: tuple[str, ...] = ("create", "update", "delete"),
+    order: int = 100,
+    module: str = "core",
+) -> None:
+    """Register a write-time rule for `entity_name`. `fn` raises to abort the
+    write (any exception; `repository.ValidationError` is conventional but not
+    required) or returns normally to allow it.
+
+    Multiple validators on the same entity all run, in `order` then
+    registration order, for every action in their declared `actions` tuple --
+    a validator scoped to `actions=("update",)` never fires on create or
+    delete, so a rule about closing a commitment cannot accidentally block
+    creating one.
+    """
+    _VALIDATORS.append(_RegisteredValidator(entity_name, fn, actions, order, module))
+    _VALIDATORS.sort(key=lambda v: v.order)
+
+
+def validators_for(entity_name: str, action: str) -> list[Validator]:
+    return [v.fn for v in _VALIDATORS if v.entity == entity_name and action in v.actions]
+
+
+def reset_validators() -> None:
+    """Drop every registered validator. Tests only."""
+    _VALIDATORS.clear()
+
+
+def validator_snapshot() -> list[_RegisteredValidator]:
+    """An opaque snapshot of the current validator list, for a test that adds
+    one temporarily and must remove exactly what it added.
+
+    A blanket `reset_validators()` is wrong for this purpose the moment a
+    module registers a validator meant to survive for the whole test session
+    (e.g. `modules/investor_portal`'s commitment-closing gate, installed once
+    at session scope) -- resetting after every test would delete it
+    permanently, since nothing re-installs modules per test.
+    """
+    return list(_VALIDATORS)
+
+
+def restore_validators(snapshot: list[_RegisteredValidator]) -> None:
+    _VALIDATORS[:] = snapshot
+
+
 def reset() -> None:
     """Drop every registration. Tests only."""
     _ENTITIES.clear()
     _ROLES.clear()
+    _VALIDATORS.clear()
 
 
 # ── Field resolution ─────────────────────────────────────────────────────────
@@ -258,6 +372,13 @@ def verify(tables: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
             if side not in known:
                 problems.append({"role": role_spec.name, "problem": "unknown_entity",
                                  "entity": side})
+
+    for validator in _VALIDATORS:
+        if validator.entity not in known:
+            problems.append({
+                "validator_module": validator.module,
+                "problem": "unknown_entity", "entity": validator.entity,
+            })
     return problems
 
 
@@ -358,6 +479,37 @@ def register_core_entities() -> None:
             "body": FieldSpec("body", "text", column="body", required=True),
             "subject_type": FieldSpec("subject_type", "text", column="subject_type"),
             "subject_id": FieldSpec("subject_id", "uuid", column="subject_id"),
+        }),
+    ))
+
+    # Generic, subject-polymorphic like tasks/notes -- documents are core, not
+    # vertical (docs/INVESTOR-PORTAL.md). "Subscription agreement" is meaning a
+    # module attaches via `kind`; this table has no idea what a commitment is.
+    # `provider`/`provider_envelope_id` are free text so a new esign provider
+    # (R3's sixth axis) never needs a schema change to be recorded here.
+    register(EntitySpec(
+        name="document", table="core.documents", label="Documents",
+        label_field="filename", searchable=("filename", "kind"),
+        fields=_spine({
+            "subject_type": FieldSpec("subject_type", "text", column="subject_type"),
+            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id"),
+            "kind": FieldSpec("kind", "text", column="kind"),
+            "filename": FieldSpec("filename", "text", column="filename"),
+            "storage_key": FieldSpec("storage_key", "text", column="storage_key",
+                                     writable=False),
+            "mime": FieldSpec("mime", "text", column="mime"),
+            "bytes": FieldSpec("bytes", "number", column="bytes", writable=False),
+            "provider": FieldSpec("provider", "text", column="provider"),
+            "provider_envelope_id": FieldSpec("provider_envelope_id", "text",
+                                              column="provider_envelope_id",
+                                              writable=False),
+            "status": FieldSpec(
+                "status", "select", column="status",
+                options=("draft", "sent_for_signature", "partially_signed",
+                         "executed", "void", "expired"),
+            ),
+            "valid_from": FieldSpec("valid_from", "date", column="valid_from"),
+            "valid_until": FieldSpec("valid_until", "date", column="valid_until"),
         }),
     ))
 

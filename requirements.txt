@@ -6,6 +6,13 @@ uvicorn[standard]
 psycopg2-binary
 pgvector
 
+# DocuSign's JWT Bearer Grant (server/providers/docusign_esign.py) requires
+# RS256-signing a JWT with an RSA private key. Hand-rolling RSA/PKCS1v15
+# signing in stdlib is exactly the kind of thing that becomes a real security
+# bug, so this one narrow, vetted dependency is used for the signature only --
+# not a JWT/OAuth framework, just RSA signing.
+cryptography
+
 # Development only.
 pytest
 httpx
