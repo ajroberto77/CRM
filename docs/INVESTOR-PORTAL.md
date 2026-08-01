@@ -14,7 +14,7 @@ site. Screenshots from behind their login are still to come; the sections marked
 **[needs screenshots]** are where they will change the design rather than
 confirm it.
 
-**Three decisions confirmed by the user:**
+**Five decisions confirmed by the user:**
 
 1. **Accredited investors only, today.** No non-accredited tier, no Reg CF/A+
    crowdfunding path active. But the investor-type model must **not** hard-code
@@ -31,6 +31,15 @@ confirm it.
    consequence that would loosen under 506(c), a permanent product decision.**
    This is simpler to build than a conditional rule, and it is enforced
    structurally, not just by a permission check — see below.
+4. **The questionnaire is self-serve.** An investor fills it in themselves,
+   through the portal — which puts the external identity class (M9c) on the
+   critical path for the questionnaire's *delivery*, even though its schema,
+   versioning and mandate derivation (M9a) do not depend on M9c at all and can
+   be built and tested first, with the team previewing/answering internally.
+5. **Investment pathways are separate legal vehicles today**, with the model
+   kept open to a shared-vehicle pathway later — see "Pathways" below. This was
+   the least obvious of the five and gets its own section because it is a real
+   schema decision, not just a policy toggle.
 
 ## The wall between the public site and the portal
 
@@ -93,8 +102,13 @@ Core stays domain-neutral (R6). The portal is a module, like `funds`.
 investor_categories(id, org_id, key, label, requires_verification,
                     is_enabled, sort_order)
 
+investment_pathways(id, org_id, key, label, description, default_min_check,
+                    default_currency, is_enabled, sort_order, custom)
+
+pathway_vehicles(id, org_id, pathway_id, fund_id, added_at)
+
 investor_profiles(id, org_id, subject_type, subject_id,
-                  category_id, status, tier, accreditation_method,
+                  category_id, pathway_id, status, accreditation_method,
                   accredited_at, accreditation_expires_at, verified_by,
                   relationship_since, min_check, max_check, custom)
 
@@ -119,8 +133,14 @@ offering_grants(id, org_id, offering_id, subject_type, subject_id,
 
 `status` on `investor_profiles`: `prospect | questionnaire_sent |
 questionnaire_complete | self_accredited | verified | active | lapsed |
-declined`. `tier` maps to the firm's pathways (fund / select / network), which
-is how one platform serves all three without branching per tier in code.
+declined`.
+
+Everything lives in `modules/investor_portal`, including `pathway_vehicles`,
+which is the one table that references `core.funds`. The dependency runs one
+way only: `investor_portal` knows about `funds`, exactly as `offerings.fund_id`
+already does — `modules/funds` gains no column, no table, and no awareness that
+`investor_portal` exists. That already-built, already-tested module needs no
+migration for any of this.
 
 ### Investor categories are extensible, not a code enum
 
@@ -129,7 +149,7 @@ Three distinct dimensions, easy to conflate and kept apart on purpose:
 | Dimension | Answers | Where it lives |
 |---|---|---|
 | **Category** | What kind of investor, legally/regulatorily — accredited individual, accredited entity, qualified purchaser, qualified client, institutional, non-accredited | `investor_categories`, admin-configurable |
-| **Tier** | Which of the firm's pathways they invest through — fund / select / network | `investor_profiles.tier` |
+| **Pathway** | Which of the firm's programs they invest through | `investment_pathways`, admin-configurable — see below |
 | **Mandate** | What they want to invest in — the questionnaire | `investor_mandates` |
 
 `investor_categories` follows the same pattern as `core.custom_fields`: a
@@ -149,6 +169,37 @@ time.
 The onboarding flow and the questionnaire only ever present **enabled**
 categories, so nothing changes in what an investor sees until the firm
 deliberately turns a category on.
+
+### Pathways: separate legal vehicles today, without foreclosing a shared one
+
+Confirmed: pathways today are **separate legal vehicles** — a distinct fund or
+SPV per program — but the model must not hard-code that as the only shape a
+future pathway can take.
+
+`investment_pathways` is the CRM-facing program (the thing an investor and the
+team talk about — "Main Fund", "Portfolio Select", whatever names the firm
+actually uses). `pathway_vehicles` is a many-to-many join to the *real* legal
+vehicles, `core.funds`, that implement it. Nothing about "dedicated vehicle" vs
+"shared vehicle" is a stored mode or a branch in code — it is purely a
+consequence of how many `funds` rows get linked to a pathway:
+
+- **Dedicated vehicle (today's model):** each pathway links to its own fund, or
+  gains a fresh one per vintage or per deal — a new SPV under "Network" is just
+  another row in `pathway_vehicles` for that pathway.
+- **Shared vehicle (available, not built for):** a future pathway could link to
+  the *same* `fund_id` another pathway already uses — two access tiers into one
+  pool of capital — with zero schema change, because the join table already
+  permits it.
+
+This is the same reasoning as `investor_categories`: one extensible mechanism,
+not two mechanisms picked between at design time (R1). A commitment points at a
+real `fund_id` either way, so `core.commitments` and everything built on it in
+M1 is unaffected regardless of which shape a given pathway takes.
+
+`investor_profiles.pathway_id` records which pathway an investor primarily
+engages through, for onboarding and portal display; the authoritative record of
+what they actually hold is still the `commitments` rows themselves, each
+pointing at a real vehicle.
 
 ### Why questionnaires are versioned
 
@@ -254,38 +305,34 @@ stopped moving.
 
 | Phase | Delivers |
 |---|---|
-| **M9a** | `investor_profiles`, questionnaires with versioned responses, mandates, and the internal UI to review and correct a classification |
+| **M9a** | `investor_profiles`, `investor_categories`, `investment_pathways` + `pathway_vehicles`, questionnaires with versioned responses, mandates, and the internal UI to review and correct a classification |
 | **M9b** | Matching in both directions, plus `offerings` and human-granted `offering_grants` |
-| **M9c** | External identity class, the gated portal, and the public marketing site |
+| **M9c** | External identity class, the self-serve questionnaire delivered through the gated portal, and the public marketing site |
 
 Sequencing note: **M9a is worth doing early regardless**, because classifying
 existing investors is useful to the internal CRM on its own, and the
 questionnaire data is what M9b's matching needs to be worth building.
-`investor_categories` is seeded as part of M9a, so the extensibility exists from
-the first migration even though only two categories start enabled.
+`investor_categories` and `investment_pathways` are both seeded as part of
+M9a, so the extensibility exists from the first migration even though only a
+few of each start enabled — and the questionnaire's schema, versioning and
+mandate derivation can be built and tested in M9a even though self-serve
+*delivery* of it waits on M9c's external identity class.
 
 ## Confirmed
 
-- **Accredited investors only, today** — modeled as an extensible category
-  registry, not an assumption in code. See "Investor categories are
-  extensible."
-- **Self-certifying** — which settles the exemption as **506(b)**, since 506(c)
-  requires verified accreditation. `accreditation_method` defaults to
-  `self_certified`; no verification vendor in v1.
-- **The public site never shows an offering** — a permanent product rule,
-  enforced structurally (no import path from the public site to offering data),
-  not merely a 506(b)-era policy that would loosen under 506(c).
+See the five numbered decisions at the top of this document (accredited-only
+as an extensible category, self-certifying / 506(b), the public site never
+shows an offering, self-serve questionnaire, and pathways as separate legal
+vehicles kept open to a shared-vehicle model).
 
 ## Open questions for John
 
-1. **Are the three pathways separate legal entities**, or tiers within one? It
-   changes whether `tier` is a field or a set of `funds` rows.
-2. **Does the portal need e-signature and subscription documents in v1**, or is
+1. **Does the portal need e-signature and subscription documents in v1**, or is
    the first version read-only with commitments handled offline?
-3. **Is the questionnaire self-serve, or filled in by the team on a call?**
-   The former needs the external identity class first; the latter can ship
-   inside the internal app immediately.
-4. **Any near-term plan to enable a second investor category** — a qualified
+2. **Any near-term plan to enable a second investor category** — a qualified
    purchaser tier, an institutional tier, eventually Reg CF? Nothing blocks on
    the answer since the registry supports it either way, but it affects what
    `requires_verification` defaults should be seeded with.
+3. **What are the pathways actually called, and what's each one's minimum
+   check?** Needed to seed `investment_pathways` with real rows rather than
+   placeholders modeled on Florida Funders' naming.
