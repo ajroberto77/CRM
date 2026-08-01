@@ -363,6 +363,11 @@ TABLES: dict[str, dict[str, str]] = {
     "core.custom_fields": {
         "id": _UUID_PK,
         "org_id": _ORG_FK,
+        # Present because custom_fields is a registered entity like any other,
+        # and visibility_predicate() emits a predicate on owner_id for every
+        # non-admin. registry.verify() refuses to start without it.
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
         "entity": "text NOT NULL DEFAULT ''",
         "key": "text NOT NULL DEFAULT ''",
         "label": "text NOT NULL DEFAULT ''",

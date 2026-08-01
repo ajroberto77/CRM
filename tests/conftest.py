@@ -27,7 +27,7 @@ os.environ.setdefault("CRM_DB_HOST", "localhost")
 os.environ.setdefault("CRM_SESSION_COOKIE_SECURE", "false")
 
 from server import config  # noqa: E402
-from server.core import users  # noqa: E402
+from server.core import events, permissions, registry, users  # noqa: E402
 from server.db import pool, schema  # noqa: E402
 
 
@@ -46,9 +46,29 @@ def _migrated() -> None:
             f"no PostgreSQL at {config.get_db_dsn()!r} -- see tests/conftest.py",
             allow_module_level=True,
         )
+    registry.reset()
+    registry.register_core_entities()
     schema.migrate()
     yield
     pool.close_pool()
+
+
+@pytest.fixture(autouse=True)
+def _no_leftover_subscribers():
+    """Subscribers are global. A test that registers one must not affect the
+    next, or failures appear in whichever test happens to run after it."""
+    yield
+    events.reset()
+
+
+@pytest.fixture
+def principal(admin) -> permissions.Principal:
+    return permissions.load_principal(admin)
+
+
+@pytest.fixture
+def member_principal(member) -> permissions.Principal:
+    return permissions.load_principal(member)
 
 
 @pytest.fixture(autouse=True)

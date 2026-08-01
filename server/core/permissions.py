@@ -32,12 +32,17 @@ it.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from server.db import pool
 
 ACTIONS = ("create", "read", "edit", "delete")
 LEVELS = ("none", "own", "team", "all")
+
+# The all-zero UUID, used as the actor on platform-originated writes. A real
+# uuid so it satisfies the column type; never a real user, and never granted a
+# session.
+SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000"
 
 # Ordered weakest -> strongest, so a permissive merge is a max().
 _LEVEL_RANK = {level: index for index, level in enumerate(LEVELS)}
@@ -105,6 +110,11 @@ class Principal:
     is_admin: bool = False
     team_id: Optional[str] = None
     permissions: dict[str, ObjectPermissions] = field(default_factory=dict)
+    # Set only by system_principal(). Recorded on every event this principal
+    # causes, so a platform-originated write is distinguishable from a human
+    # one in the audit trail rather than appearing as a mystery admin.
+    is_system: bool = False
+    system_reason: str = ""
 
     def for_object(self, obj: str) -> ObjectPermissions:
         """An admin has everything. Otherwise, an object with no scope row
@@ -274,23 +284,107 @@ def visibility_predicate(
 
 
 def mask_record(principal: Principal, obj: str, record: dict[str, Any]) -> dict[str, Any]:
-    """Strip fields this principal may not read. Applied on the way out, at the
-    same choke point the visibility predicate is applied on the way in."""
+    """Strip fields this principal may not read.
+
+    Handles `custom.<key>` masks as well as top-level columns. Filtering only
+    top-level keys would silently do nothing for every custom field, because
+    they all live inside one `custom` column -- a mask named `custom.salary_band`
+    would appear configured and have no effect whatsoever.
+    """
     perms = principal.for_object(obj)
     if not perms.field_masks:
         return record
-    return {k: v for k, v in record.items() if perms.readable_field(k)}
+
+    masked = {k: v for k, v in record.items() if perms.readable_field(k)}
+
+    custom = masked.get("custom")
+    if isinstance(custom, dict):
+        hidden = {
+            name.partition(".")[2]
+            for name in perms.field_masks
+            if name.startswith("custom.") and not perms.readable_field(name)
+        }
+        if hidden:
+            masked["custom"] = {k: v for k, v in custom.items() if k not in hidden}
+    return masked
 
 
-def reject_masked_writes(principal: Principal, obj: str, changes: dict[str, Any]) -> None:
-    """Raise if `changes` touches a field this principal may not write.
+def reject_masked_writes(
+    principal: Principal,
+    obj: str,
+    changes: dict[str, Any],
+    *,
+    clear: Iterable[str] = (),
+) -> None:
+    """Raise if `changes` (or `clear`) touches a field this principal may not
+    write. Custom keys are checked inside `changes['custom']`.
 
     Silently dropping the field instead would report success for a write that
     did not happen, which is the same class of defect as a no-op gate.
+
+    Pass ONLY user-supplied changes. Registry defaults and system columns must
+    not be included, or creating a record becomes impossible whenever any
+    defaulted field happens to be masked.
     """
     perms = principal.for_object(obj)
     if not perms.field_masks:
         return
-    blocked = sorted(k for k in changes if not perms.writable_field(k))
+
+    blocked = {k for k in changes if k != "custom" and not perms.writable_field(k)}
+
+    custom = changes.get("custom")
+    if isinstance(custom, dict):
+        blocked |= {
+            f"custom.{k}" for k in custom
+            if not perms.writable_field(f"custom.{k}")
+        }
+    blocked |= {
+        key for key in clear
+        if not perms.writable_field(key if "." in key else f"custom.{key}")
+    }
+
     if blocked:
-        raise PermissionDenied("edit", obj, f"read-only field(s): {', '.join(blocked)}")
+        raise PermissionDenied(
+            "edit", obj, f"read-only field(s): {', '.join(sorted(blocked))}"
+        )
+
+
+def require_field_readable(principal: Principal, obj: str, field_name: str) -> None:
+    """Assert a single field is readable.
+
+    Exists because filtering or sorting on a masked field is a disclosure
+    oracle: `salary > 200000` returns exactly the right rows even though
+    `salary` never appears in any response, so the value is recoverable by
+    binary search. The filter compiler calls this for every referenced field.
+    """
+    if not principal.for_object(obj).readable_field(field_name):
+        raise PermissionDenied("read", obj, f"field {field_name!r}")
+
+
+def require_field_writable(principal: Principal, obj: str, field_name: str) -> None:
+    if not principal.for_object(obj).writable_field(field_name):
+        raise PermissionDenied("edit", obj, f"field {field_name!r}")
+
+
+def system_principal(org_id: str, reason: str) -> Principal:
+    """A principal for writes the platform originates itself -- sync jobs,
+    event subscribers, derived-column refresh.
+
+    It exists so those writes go through the repository like everything else
+    rather than opening a cursor directly. Without it, every subscriber author
+    writes `Principal(..., is_admin=True)` inline and the codebase acquires an
+    unaudited superuser with no record of what acted or why.
+
+    `reason` is required and lands in the event log's `actor_kind`.
+    """
+    if not reason:
+        raise ValueError("a system principal must state a reason")
+    return Principal(
+        user_id=SYSTEM_USER_ID,
+        org_id=org_id,
+        is_admin=True,
+        team_id=None,
+        permissions={},
+        is_system=True,
+        system_reason=reason,
+    )
