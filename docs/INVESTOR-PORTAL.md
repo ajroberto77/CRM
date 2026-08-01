@@ -14,6 +14,16 @@ site. Screenshots from behind their login are still to come; the sections marked
 **[needs screenshots]** are where they will change the design rather than
 confirm it.
 
+**Confirmed by the user: accredited investors only.** No non-accredited tier,
+no Reg CF/A+ crowdfunding path, no "investor sophistication" carve-out to model.
+That removes an entire axis of complexity — `investor_profiles.status` and the
+onboarding flow only ever deal with one population, and the portal never has to
+decide what a non-accredited investor is allowed to see. It does **not** by
+itself answer 506(b) vs 506(c) (question 1 below still stands): accredited-only
+is the *population*, 506(b)/(c) is *how solicitation and verification work*
+for that population, and Florida Funders' own self-accreditation model is
+506(b)-shaped. Proceeding on that assumption unless told otherwise.
+
 ## The constraint that dictates the architecture
 
 **506(b) prohibits general solicitation.** Offerings cannot be advertised
@@ -203,8 +213,10 @@ questionnaire data is what M9b's matching needs to be worth building.
 
 ## Open questions for John
 
-1. **506(b) or 506(c)?** It decides whether the public site may mention live
-   offerings at all, and whether self-accreditation is sufficient.
+1. **506(b) or 506(c)?** Population is confirmed as accredited-only; this is
+   about mechanism, not population. It decides whether the public site may
+   mention live offerings at all, and whether self-accreditation is sufficient
+   or verification is required.
 2. **Who verifies accreditation** — self-certification, a third-party service,
    or documents reviewed in-house? This sets the evidence the portal must store.
 3. **Are the three pathways separate legal entities**, or tiers within one? It
