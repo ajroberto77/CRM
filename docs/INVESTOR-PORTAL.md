@@ -14,7 +14,7 @@ site. Screenshots from behind their login are still to come; the sections marked
 **[needs screenshots]** are where they will change the design rather than
 confirm it.
 
-**Five decisions confirmed by the user:**
+**Eight decisions confirmed by the user:**
 
 1. **Accredited investors only, today.** No non-accredited tier, no Reg CF/A+
    crowdfunding path active. But the investor-type model must **not** hard-code
@@ -40,6 +40,17 @@ confirm it.
    kept open to a shared-vehicle pathway later — see "Pathways" below. This was
    the least obvious of the five and gets its own section because it is a real
    schema decision, not just a policy toggle.
+6. **E-signature and subscription documents are wanted for v1.** This is the
+   platform's **sixth provider axis** — `CLAUDE.md`'s R3 is updated accordingly,
+   deliberately, rather than letting a dispatcher appear without the same
+   sign-off every other axis got. See "Subscription documents and e-signature"
+   below.
+7. **No plans for a second investor category right now, but "who knows."**
+   Nothing to build differently — this simply confirms the extensible-registry
+   design in point 1 was the right call rather than premature generality.
+8. **Pathway names and minimums are deferred.** Not blocking: `investment_pathways`
+   ships with the extensible shape in M9a regardless, and gets seeded with real
+   rows whenever the names are decided.
 
 ## The wall between the public site and the portal
 
@@ -282,6 +293,96 @@ decision landing:
 - Rate limiting and enumeration protection matter here in a way they do not
   internally: this surface faces the public.
 
+## Subscription documents and e-signature
+
+Confirmed as wanted for v1, not deferred to a later phase.
+
+### Documents are core, not vertical
+
+`docs/VERTICAL-ASSET-MANAGEMENT.md` already scoped a generic `documents` table
+for M2 (subject-polymorphic, `valid_until` gating an action). E-signature is a
+natural extension of that same generic capability — any CRM wants "generate and
+sign a document tied to a record," not just this vertical — so it belongs in
+**core**, with `modules/investor_portal` as its first real consumer rather than
+its owner. This is the same split as `funds`/`core.organizations`: the generic
+primitive lives centrally, the vertical meaning attaches through subject type.
+
+```
+core.documents(id, org_id, subject_type, subject_id, kind, filename,
+               storage_key, mime, bytes, uploaded_by,
+               status, valid_from, valid_until, custom)
+-- status: draft | sent_for_signature | partially_signed | executed | void | expired
+
+core.document_templates(id, org_id, key, name, kind, provider_template_id,
+                        merge_schema jsonb, is_enabled, created_at)
+
+core.document_signers(id, org_id, document_id, subject_type, subject_id,
+                      role, order_index, status, signed_at, provider_signer_id)
+-- role is free text ('investor', 'gp', 'witness'); status: pending|sent|viewed|signed|declined
+```
+
+`core.documents.subject_type`/`subject_id` is exactly how `tasks` and `notes`
+already attach to arbitrary records, so a subscription agreement pointing at a
+`commitment` (a `modules/funds` entity) needs no FK from `documents` to `funds`
+and no awareness in either direction — the same one-way-dependency discipline
+already used for `pathway_vehicles` → `core.funds`.
+
+### The sixth provider axis
+
+E-signature is dispatched exactly like the other five (R2/R3):
+
+```
+server/providers/esign.py          -- create_envelope(), send(), status(), download_executed()
+server/providers/<provider>_esign.py   -- the first adapter
+```
+
+`CLAUDE.md`'s R3 is updated to six axes as part of this decision, not as a
+side effect of writing the adapter — a dispatcher appearing without that
+sign-off is exactly what R3's own text now warns against.
+
+**Which vendor is still open** (DocuSign, Dropbox Sign, PandaDoc, Adobe Sign
+all fit the shape) — see open questions. The dispatch contract does not change
+based on the answer; only which `<provider>_esign.py` file gets written first.
+
+### The workflow does not require the portal to exist
+
+A useful decoupling, worth stating because it changes sequencing: most
+e-signature providers deliver via their **own hosted signing page**, reached by
+an emailed link — the investor does not need to be logged into this platform's
+portal to sign. So the subscription-document workflow (generate from a
+template + commitment data, send for signature, track status, mark the
+commitment's paperwork complete) can ship as soon as `core.documents` and the
+`esign` dispatcher exist, independent of M9c's external identity class and
+gated portal. The portal, once it exists, upgrades the experience — a
+"documents" tab with live status instead of an email thread — but is not on the
+critical path for e-signature to work at all.
+
+### The gate this needs, and the mechanism M1 does not have yet
+
+The rule the firm will want is straightforward to state and not yet
+mechanically enforceable in the current repository: **a commitment should not
+reach `status = 'closed'` without an executed subscription document.**
+
+M1's event bus (`server/core/events.py`) cannot enforce this — its subscribers
+run *after* commit and cannot roll a write back, by design (see that module's
+docstring). A gate has to run *inside* the write, before commit, which
+`repository.py` does not yet expose a hook for. The needed addition, when this
+phase is built:
+
+```
+registry.register_validator(entity: str, fn: Callable[[Principal, dict, dict], None])
+```
+
+called synchronously inside `repository.update()`'s transaction, before
+commit, raising to abort the write — the same "raise, never no-op" discipline
+every other gate in this platform already follows. Core calls whatever
+validators are registered for an entity without knowing what they check, so
+`modules/investor_portal` can register "commitment closing requires an executed
+subscription document" without `repository.py` ever mentioning a commitment or
+a document. This is a small, generic addition to the M1 repository — not
+specific to e-signature — and is worth building the first time *any* module
+needs a real write-time business rule, which this is.
+
 ## What the public site is
 
 Small, and mostly static: who the firm is, thesis, team, portfolio (past
@@ -299,15 +400,16 @@ what the investor's own dashboard reports. Those will change this design.
 ## Where this sits in the plan
 
 A new milestone, after the internal product is usable. It depends on
-`modules/funds` (M1, done), documents (M2), the approval queue (M5), and the
-external-identity work is best done once the internal permission model has
-stopped moving.
+`modules/funds` (M1, done), `core.documents` and the `esign` dispatcher (M2),
+the approval queue (M5), and the external-identity work is best done once the
+internal permission model has stopped moving.
 
 | Phase | Delivers |
 |---|---|
 | **M9a** | `investor_profiles`, `investor_categories`, `investment_pathways` + `pathway_vehicles`, questionnaires with versioned responses, mandates, and the internal UI to review and correct a classification |
 | **M9b** | Matching in both directions, plus `offerings` and human-granted `offering_grants` |
 | **M9c** | External identity class, the self-serve questionnaire delivered through the gated portal, and the public marketing site |
+| **M9d** | Subscription-document generation and e-signature: `core.document_templates`/`document_signers`, the `esign` provider dispatch, and the commitment-closing gate |
 
 Sequencing note: **M9a is worth doing early regardless**, because classifying
 existing investors is useful to the internal CRM on its own, and the
@@ -318,21 +420,28 @@ few of each start enabled — and the questionnaire's schema, versioning and
 mandate derivation can be built and tested in M9a even though self-serve
 *delivery* of it waits on M9c's external identity class.
 
+**M9d does not depend on M9c.** Because signing happens on the provider's own
+hosted page reached by an emailed link (see "The workflow does not require the
+portal to exist" above), subscription documents can go out and get signed as
+soon as `core.documents` and the `esign` dispatcher land in M2 — the gated
+portal is a UX upgrade for that flow, not a prerequisite.
+
 ## Confirmed
 
-See the five numbered decisions at the top of this document (accredited-only
-as an extensible category, self-certifying / 506(b), the public site never
-shows an offering, self-serve questionnaire, and pathways as separate legal
-vehicles kept open to a shared-vehicle model).
+See the eight numbered decisions at the top of this document: accredited-only
+as an extensible category; self-certifying / 506(b); the public site never
+shows an offering; self-serve questionnaire; pathways as separate legal
+vehicles kept open to a shared-vehicle model; e-signature and subscription
+documents wanted for v1, landing as the platform's sixth provider axis; no
+near-term plan for a second investor category; and pathway names/minimums
+deferred without blocking anything.
 
 ## Open questions for John
 
-1. **Does the portal need e-signature and subscription documents in v1**, or is
-   the first version read-only with commitments handled offline?
-2. **Any near-term plan to enable a second investor category** — a qualified
-   purchaser tier, an institutional tier, eventually Reg CF? Nothing blocks on
-   the answer since the registry supports it either way, but it affects what
-   `requires_verification` defaults should be seeded with.
-3. **What are the pathways actually called, and what's each one's minimum
+1. **Which e-signature provider** — DocuSign, Dropbox Sign, PandaDoc, Adobe
+   Sign? The dispatch shape (`server/providers/esign.py`) does not change based
+   on the answer; only which `<provider>_esign.py` adapter gets written first,
+   and what API credentials to provision.
+2. **What are the pathways actually called, and what's each one's minimum
    check?** Needed to seed `investment_pathways` with real rows rather than
-   placeholders modeled on Florida Funders' naming.
+   placeholders modeled on Florida Funders' naming. Not blocking.

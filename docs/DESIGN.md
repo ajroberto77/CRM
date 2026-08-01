@@ -64,9 +64,10 @@ clauses in `CLAUDE.md`, policed by a `no-dupes` subagent (modelled on CATO's
 > directly — only through a single dispatch point. Adding a provider = one new
 > `<provider>_*.py` + one `elif`.
 >
-> **R3 — Five axes, five dispatchers.** Nothing else branches on provider
+> **R3 — Six axes, six dispatchers.** Nothing else branches on provider
 > identity: `llm/router.py`, `providers/mail.py`, `providers/calendar.py`,
-> `providers/contacts.py`, `channels/dispatch.py`.
+> `providers/contacts.py`, `channels/dispatch.py`, `providers/esign.py` (added
+> for M9d's subscription documents — see `docs/INVESTOR-PORTAL.md`).
 >
 > **R4 — One CRUD path.** Entities are declared once in a registry and get
 > repository + REST + list/detail UI generically.
@@ -599,6 +600,7 @@ split has to be built into the schema rather than added as a filter later.
 | M0 | Scaffold, `CLAUDE.md` + R1–R5, `.claude/agents/`, `tokens.css`, `config.py`, pool + schema, users/roles/sessions/RLS | `psql` shows the schema with `FORCE RLS`; login works; first-run setup path exists |
 | M1 | Registry + generic repository + event bus + REST + table/detail/saved views + dated `associations` | CRUD on all core entities through one code path; one org holds four roles at once |
 | M2 | `interactions` + person/org derivation + `contact_channels` + merged timeline + `metric_facts` + `documents` | Importing a mailbox materializes people nobody typed; a quarterly KPI charts |
+| M9d | `document_templates` + `document_signers` + the `esign` provider dispatch (R3's sixth axis) | A subscription document generates from a commitment, gets signed on the provider's hosted page, and updates status without the portal existing |
 | M3 | LLM router + fallback chain + settings UI | Chain rolls down on `ProviderUnavailable`, does *not* on malformed output |
 | M4 | OAuth + Microsoft & Google contact sync + provenance | Delta advances; a forced 410 recovers without data loss |
 | M5 | Calendar + scheduling extraction + `proposed_changes` + trust/categories | A proposed meeting queues; auto-accept fires only on category **and** trust |

@@ -33,9 +33,9 @@ Adding a provider is **one new `<provider>_*.py` file plus one `elif` in the
 dispatcher**. If adding a provider requires touching anything else, the seam is
 in the wrong place.
 
-### R3 — Five axes, five dispatchers
+### R3 — Six axes, six dispatchers
 
-The platform has exactly five provider axes. Each has exactly one dispatch
+The platform has exactly six provider axes. Each has exactly one dispatch
 module, and **no other file may branch on provider identity**.
 
 | Axis | Dispatcher | Adapters |
@@ -45,6 +45,12 @@ module, and **no other file may branch on provider identity**.
 | Calendar | `server/providers/calendar.py` | microsoft, google |
 | Contacts | `server/providers/contacts.py` | microsoft, google |
 | Messaging | `server/channels/dispatch.py` | signal, telegram, email |
+| E-signature | `server/providers/esign.py` | provider TBD — see `docs/INVESTOR-PORTAL.md` |
+
+This list grew once, deliberately, when subscription-document e-signature was
+scoped for the investor portal. It is not meant to grow casually — adding a
+seventh axis should be argued for as explicitly as this one was, not slipped in
+alongside an unrelated feature.
 
 ### R4 — One CRUD path
 

@@ -35,12 +35,13 @@ Flag it when a diff adds a helper whose body is under ~15 lines and whose shape
 already exists elsewhere — that is the size at which duplication feels cheaper
 than searching, which is exactly when this rule earns its keep.
 
-## R2 / R3 — Generic core, name-prefixed adapters, five dispatchers
+## R2 / R3 — Generic core, name-prefixed adapters, six dispatchers
 
 - Grep the diff for provider names: `microsoft`, `graph`, `outlook`, `google`,
   `gmail`, `ollama`, `openai`, `anthropic`, `claude`, `gemini`, `signal`,
-  `telegram`. Any occurrence **outside** a `<provider>_*.py` adapter or the five
-  dispatchers listed in `CLAUDE.md` is a violation.
+  `telegram`, `docusign`, `hellosign`, `dropboxsign`, `pandadoc`, `adobesign`.
+  Any occurrence **outside** a `<provider>_*.py` adapter or the six dispatchers
+  listed in `CLAUDE.md` is a violation.
 - A generic module importing a provider module directly is a violation, even if
   it is guarded by a conditional.
 - Confirm the arithmetic still holds: **adding a provider = one new file + one
