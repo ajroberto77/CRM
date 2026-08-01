@@ -605,6 +605,13 @@ split has to be built into the schema rather than added as a filter later.
 | M6 | Signal + Telegram command loop | Approve from a phone; both channels resolve to the right user |
 | M7 | Work queue + workers, deal rotting, Cmd-K, pgvector search, hardening | Full sync runs as a background job |
 | M8 | `modules/funds`: funds, commitments, capital transactions, positions, investments | "Who committed to Fund II, what have they paid, what is it worth" — with core still not mentioning a fund |
+| M9a | Investor profiles, versioned questionnaires, derived mandates | An investor can be classified by what they want to invest in, and corrected by hand |
+| M9b | Two-way matching, offerings, human-granted sight of them | "Which investors fit this offering" answers, and nothing is granted automatically |
+| M9c | External identity class, gated investor portal, public site | An investor sees only their granted offerings; a logged-out visitor sees none |
+
+M9a is worth pulling forward: classifying existing investors is useful to the
+internal CRM on its own, and its data is what makes the matching in M9b worth
+building. See `docs/INVESTOR-PORTAL.md`.
 
 ## Verification
 
