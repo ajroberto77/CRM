@@ -11,6 +11,8 @@ the same way `modules/investor_portal`'s subscriber wires in from its own
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from server.core import events, identity, permissions, registry, repository
 
 # interaction.kind -> the contact_channel kind its from_channel/to_channels
@@ -24,16 +26,19 @@ _CHANNEL_KIND_FOR_INTERACTION_KIND = {
 }
 
 
-def _resolve_or_create_person(principal, channel_kind: str, raw_value: str) -> None:
+def resolve_or_create_person(principal, channel_kind: str, raw_value: str) -> Optional[str]:
     """Look up an existing contact_channel for `raw_value`; materialize a
-    person + channel only if none matches. An unparseable value resolves to
-    nothing -- there is no value to fabricate a person around.
+    person + channel only if none matches. Returns the resolved or newly
+    created person's id, or None for an unparseable value -- there is no
+    value to fabricate a person around. Public: also called directly by
+    `server/jobs/sync_poller.py` (M4), which needs the person id to record
+    a `core.sync_links` mapping back to the external contact.
 
-    Known gap: this is select-then-insert, not atomic. Two interactions
-    naming the same brand-new contact for the first time, processed
-    concurrently, can each pass the "no existing channel" check before
-    either commits, producing two derived persons instead of one (the
-    second's contact_channel insert loses the race against
+    Known gap: this is select-then-insert, not atomic. Two callers naming
+    the same brand-new contact for the first time, processed concurrently,
+    can each pass the "no existing channel" check before either commits,
+    producing two derived persons instead of one (the second's
+    contact_channel insert loses the race against
     `uq_contact_channels_org_kind_value`, so it fails rather than silently
     duplicating the channel -- but the extra person row stands).
     `associations.associate()` solves the same class of race with
@@ -45,7 +50,7 @@ def _resolve_or_create_person(principal, channel_kind: str, raw_value: str) -> N
     """
     normalized = identity.normalize(channel_kind, raw_value)
     if normalized is None:
-        return
+        return None
 
     existing = repository.list_records(
         principal, "contact_channel",
@@ -56,7 +61,7 @@ def _resolve_or_create_person(principal, channel_kind: str, raw_value: str) -> N
         limit=1,
     )
     if existing["total"] > 0:
-        return
+        return str(existing["records"][0]["person_id"])
 
     person = repository.create(principal, "person", {
         # Best available label until a human promotes the record with a
@@ -72,6 +77,7 @@ def _resolve_or_create_person(principal, channel_kind: str, raw_value: str) -> N
         "value_normalized": normalized,
         "value_raw": raw_value,
     })
+    return str(person["id"])
 
 
 def _derive_contacts(event: events.RecordEvent) -> None:
@@ -91,7 +97,7 @@ def _derive_contacts(event: events.RecordEvent) -> None:
     raw_values = [interaction.get("from_channel")] + list(interaction.get("to_channels") or [])
     for raw in raw_values:
         if raw:
-            _resolve_or_create_person(principal, channel_kind, raw)
+            resolve_or_create_person(principal, channel_kind, raw)
 
 
 def _promote_on_human_edit(event: events.RecordEvent) -> None:

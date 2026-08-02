@@ -19,9 +19,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from server import config
+from server.api import accounts as accounts_api
 from server.api import auth, records
 from server.api import settings as settings_api
-from server.core import associations, modules, passwords, permissions, query, registry, repository, sessions, users
+from server.core import account_link, associations, modules, passwords, permissions, query, registry, repository, sessions, users
 from server.core import settings as core_settings
 from server.core.permissions import Principal
 from server.db import pool, schema
@@ -69,6 +70,7 @@ app = FastAPI(title="CRM", version="0.1.0", lifespan=lifespan)
 app.include_router(records.router)
 app.include_router(records.association_router)
 app.include_router(settings_api.router)
+app.include_router(accounts_api.router)
 
 
 # ── Errors ───────────────────────────────────────────────────────────────────
@@ -92,8 +94,21 @@ def _forbidden(request: Request, exc: Exception) -> Response:
 @app.exception_handler(associations.AssociationError)
 @app.exception_handler(core_settings.UnknownSection)
 @app.exception_handler(llm_router.LLMError)
+@app.exception_handler(account_link.LinkError)
 def _bad_request(request: Request, exc: Exception) -> Response:
     return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(exc)})
+
+
+@app.exception_handler(account_link.LinkUpstreamError)
+def _bad_gateway(request: Request, exc: Exception) -> Response:
+    # A failure talking to the linked provider (Microsoft/Google), not a bad
+    # request from our own caller -- 502 says "the upstream provider
+    # failed," not "you sent something wrong." Registered against
+    # `account_link.LinkUpstreamError` only -- never a provider module
+    # directly (R2) -- because `microsoft_oauth.py`/`google_oauth.py` catch
+    # `GraphError`/`GoogleApiError` at the dispatch boundary and re-raise
+    # this instead; see account_link.py's own docstring.
+    return JSONResponse(status_code=status.HTTP_502_BAD_GATEWAY, content={"detail": str(exc)})
 
 
 @app.exception_handler(repository.Conflict)

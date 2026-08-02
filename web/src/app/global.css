@@ -665,8 +665,16 @@ button:disabled {
   background: var(--status-ok);
 }
 
+.crm-status-dot-warn {
+  background: var(--status-warn);
+}
+
 .crm-status-dot-error {
   background: var(--status-error);
+}
+
+.crm-status-dot-muted {
+  background: var(--text-muted);
 }
 
 .crm-settings-ollama-fields {

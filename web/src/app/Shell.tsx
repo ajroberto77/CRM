@@ -23,6 +23,12 @@ export function Shell() {
               {e.label}
             </NavLink>
           ))}
+          <NavLink
+            to="/admin/connected-accounts"
+            className={({ isActive }) => (isActive ? 'crm-sidebar-link crm-sidebar-link-active' : 'crm-sidebar-link')}
+          >
+            Connected Accounts
+          </NavLink>
           {user?.is_admin && (
             <NavLink
               to="/admin/llm-settings"

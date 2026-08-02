@@ -6,6 +6,7 @@ import { Shell } from './Shell'
 import { EntityListPage } from '../records/EntityListPage'
 import { useEntityList } from '../records/useEntitySchema'
 import { LlmSettingsPage } from '../settings/LlmSettingsPage'
+import { ConnectedAccountsPage } from '../settings/ConnectedAccountsPage'
 
 export function App() {
   const { status, firstRunRequired } = useAuth()
@@ -28,6 +29,7 @@ export function App() {
             backend API (vite.config.ts), so a page reload here would hit
             GET /settings/llm on the server instead of the SPA shell. */}
         <Route path="admin/llm-settings" element={<LlmSettingsPage />} />
+        <Route path="admin/connected-accounts" element={<ConnectedAccountsPage />} />
         <Route path="*" element={<HomeRedirect />} />
       </Route>
     </Routes>

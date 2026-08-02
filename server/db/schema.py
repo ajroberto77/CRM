@@ -601,6 +601,97 @@ TABLES: dict[str, dict[str, str]] = {
         "created_at": _CREATED,
     },
 
+    # M4: a user's own linked Microsoft/Google account -- unlike Cal's
+    # family/assistant split, every CRM user links their own mailbox/
+    # calendar/contacts, so the natural owner is `user_id`, not an org-wide
+    # singleton. One row per (org_id, user_id, provider).
+    "core.connected_accounts": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "user_id": "uuid NOT NULL REFERENCES core.users(id) ON DELETE CASCADE",
+        "provider": (
+            "text NOT NULL DEFAULT '' CHECK (provider IN ('microsoft','google'))"
+        ),
+        "email_address": "text NOT NULL DEFAULT ''",
+        "status": (
+            "text NOT NULL DEFAULT 'pending' "
+            "CHECK (status IN ('pending','active','error','disabled'))"
+        ),
+        "status_detail": "text NOT NULL DEFAULT ''",
+        "timezone": "text NOT NULL DEFAULT 'UTC'",
+        "default_calendar_id": "text NOT NULL DEFAULT ''",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    # Split from connected_accounts (Cal's own reasoning, ported): rotation
+    # tracking, and room for a future non-OAuth credential type without
+    # reshaping the account row itself. `payload` holds `{"refresh_token",
+    # "scopes"}` -- never the access token, which is minted per call and
+    # never persisted.
+    "core.account_credentials": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "account_id": (
+            "uuid NOT NULL REFERENCES core.connected_accounts(id) ON DELETE CASCADE"
+        ),
+        "credential_type": (
+            "text NOT NULL DEFAULT 'oauth' CHECK (credential_type IN ('oauth'))"
+        ),
+        "payload": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "obtained_at": _CREATED,
+        "rotated_at": "timestamptz",
+    },
+
+    # A single-use PKCE code_verifier, held between the authorize redirect
+    # and the callback. Swept past a 900s max age on every new link attempt
+    # (server/core/account_link.py) -- this table is never large.
+    "core.oauth_pending": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "account_id": (
+            "uuid NOT NULL REFERENCES core.connected_accounts(id) ON DELETE CASCADE"
+        ),
+        "provider": (
+            "text NOT NULL DEFAULT '' CHECK (provider IN ('microsoft','google'))"
+        ),
+        "state": "text NOT NULL DEFAULT ''",
+        "code_verifier": "text NOT NULL DEFAULT ''",
+        "created_at": _CREATED,
+    },
+
+    # One row per (account, resource) rather than a column per resource on
+    # connected_accounts -- a future synced resource (mail, in a later
+    # milestone) needs no migration here, just a new `resource` value.
+    "core.sync_cursors": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "account_id": (
+            "uuid NOT NULL REFERENCES core.connected_accounts(id) ON DELETE CASCADE"
+        ),
+        "resource": (
+            "text NOT NULL DEFAULT '' CHECK (resource IN ('contacts','calendar'))"
+        ),
+        "cursor_token": "text NOT NULL DEFAULT ''",
+        "updated_at": _CREATED,
+    },
+
+    # Maps an external contact/event id to the CRM record it produced, so a
+    # re-sync updates the same row instead of duplicating it.
+    "core.sync_links": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "account_id": (
+            "uuid NOT NULL REFERENCES core.connected_accounts(id) ON DELETE CASCADE"
+        ),
+        "provider_object_id": "text NOT NULL DEFAULT ''",
+        "entity_type": (
+            "text NOT NULL DEFAULT '' CHECK (entity_type IN ('person','organization'))"
+        ),
+        "entity_id": "uuid NOT NULL",
+        "created_at": _CREATED,
+    },
+
 }
 
 # ── Indexes ──────────────────────────────────────────────────────────────────
@@ -765,6 +856,25 @@ INDEXES: tuple[str, ...] = (
 
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_roles ON core.user_roles (org_id, user_id, role_id)",
     "CREATE INDEX IF NOT EXISTS ix_user_roles_org_role ON core.user_roles (org_id, role_id)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_connected_accounts_org_user_provider "
+    "ON core.connected_accounts (org_id, user_id, provider)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_account_credentials_account "
+    "ON core.account_credentials (org_id, account_id)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_oauth_pending_state "
+    "ON core.oauth_pending (org_id, state)",
+    "CREATE INDEX IF NOT EXISTS ix_oauth_pending_created "
+    "ON core.oauth_pending (created_at)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_cursors_account_resource "
+    "ON core.sync_cursors (org_id, account_id, resource)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_sync_links_account_object "
+    "ON core.sync_links (org_id, account_id, provider_object_id)",
+    "CREATE INDEX IF NOT EXISTS ix_sync_links_org_entity "
+    "ON core.sync_links (org_id, entity_type, entity_id)",
 
 )
 
