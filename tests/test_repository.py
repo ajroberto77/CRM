@@ -205,6 +205,25 @@ class TestCustomFields:
         )
         assert person["custom"]["renewal"] == "2026-09-30"
 
+    def test_a_multiselect_custom_field_round_trips_the_real_value(self, principal):
+        """Regression: a real jsonb-backed COLUMN of kind multiselect needs
+        its value wrapped for psycopg2 (Json()), but `custom` is serialized
+        once via json.dumps() one layer up in create()/update(). Wrapping a
+        CUSTOM field's value the same way corrupted it into a quoted SQL
+        literal string instead of the real array. ('jsonb' itself is not a
+        valid custom-field kind -- core.custom_fields.kind's CHECK
+        constraint deliberately excludes it; only 'multiselect' applies
+        here.)"""
+        self._declare(principal, key="interests", kind="multiselect")
+        person = repository.create(
+            principal, "person",
+            {"full_name": "Robin", "custom": {"interests": ["golf", "sailing"]}},
+        )
+        assert person["custom"]["interests"] == ["golf", "sailing"]
+
+        refetched = repository.get_record(principal, "person", str(person["id"]))
+        assert refetched["custom"]["interests"] == ["golf", "sailing"]
+
     def test_undeclared_custom_key_is_refused(self, principal):
         with pytest.raises(registry.UnknownField):
             repository.create(

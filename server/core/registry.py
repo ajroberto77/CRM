@@ -84,6 +84,17 @@ class FieldSpec:
     # declares "team": otherwise a user at `own` level can reassign a record
     # away from themselves (losing it) or to themselves (stealing it).
     write_level: str = "own"
+    # Visibility level a principal needs, relative to the ROW's owner_id, to
+    # READ this field's real value -- None means "governed by the entity's
+    # ordinary read_level/field_masks only," the behavior every field had
+    # before this existed. Set to "own" for a field like `interaction.body`
+    # (safety rule 10): every other column on that row is org-wide, but this
+    # one is visible only to the row's owner (or an admin), regardless of
+    # the requesting principal's overall read_level on the entity. Checked
+    # per-row in repository.py's `_finalize_read()`, not compiled into the
+    # WHERE clause -- unlike write_level's entity-wide check, this depends
+    # on which specific row was fetched.
+    read_level: Optional[str] = None
 
     @property
     def is_custom(self) -> bool:
@@ -299,11 +310,54 @@ def restore_validators(snapshot: list[_RegisteredValidator]) -> None:
     _VALIDATORS[:] = snapshot
 
 
+# ── Org-creation seeds ───────────────────────────────────────────────────────
+#
+# A handful of module-owned reference tables (e.g. investor_portal's
+# investor_categories) need a fixed set of default rows the moment an org
+# exists, not left for an admin to type in by hand. `users.create_org()` is
+# the one place an org is born; this is the seam that lets a module contribute
+# to that moment without `users.py` importing the module directly (R6) --
+# same shape as `register_validator`.
+
+@dataclass(frozen=True)
+class _RegisteredOrgSeed:
+    fn: Callable[[str], None]
+    module: str
+
+
+_ORG_SEEDS: list[_RegisteredOrgSeed] = []
+
+
+def register_org_seed(fn: Callable[[str], None], *, module: str = "core") -> None:
+    """Register a callable invoked once with a new org's id, right after
+    `create_org()`'s own transaction commits. `fn` should write through
+    `repository` with `permissions.system_principal(org_id, ...)`, exactly
+    like an event subscriber, not open its own cursor.
+
+    Idempotent like `register_validator`: re-declaring the same seed on a
+    second `install()` call does not duplicate it.
+    """
+    for existing in _ORG_SEEDS:
+        if existing.fn is fn and existing.module == module:
+            return
+    _ORG_SEEDS.append(_RegisteredOrgSeed(fn, module))
+
+
+def org_seeds() -> list[Callable[[str], None]]:
+    return [s.fn for s in _ORG_SEEDS]
+
+
+def reset_org_seeds() -> None:
+    """Drop every registered org seed. Tests only."""
+    _ORG_SEEDS.clear()
+
+
 def reset() -> None:
     """Drop every registration. Tests only."""
     _ENTITIES.clear()
     _ROLES.clear()
     _VALIDATORS.clear()
+    _ORG_SEEDS.clear()
 
 
 # ── Field resolution ─────────────────────────────────────────────────────────
@@ -519,6 +573,84 @@ def register_core_entities() -> None:
             ),
             "valid_from": FieldSpec("valid_from", "date", column="valid_from"),
             "valid_until": FieldSpec("valid_until", "date", column="valid_until"),
+        }),
+    ))
+
+    # M2's primitive (docs/DESIGN.md): the CRM is a derived view over this
+    # log. `body` is the one field safety rule 10 governs -- every other
+    # column is org-wide, `body` is visible only to the row's owner (or an
+    # admin), via `read_level="own"` rather than the entity's ordinary
+    # read_level. `owner_id` (the spine field every entity carries) IS "whose
+    # mailbox observed this" here. Not marked required=True on the FieldSpec:
+    # repository.create() checks `required` BEFORE its owner_id.setdefault()
+    # runs, so that would reject the ordinary case of a human letting their
+    # own id default in. The DB's NOT NULL is the actual guarantee -- an
+    # explicit owner_id is only needed from a future system-principal writer
+    # (a sync job), which gets a clear constraint violation if it omits one.
+    register(EntitySpec(
+        name="interaction", table="core.interactions", label="Interactions",
+        label_field="subject_hash", searchable=("thread_id", "from_channel"),
+        default_sort=(("occurred_at", "desc"),),
+        fields=_spine({
+            "owner_id": FieldSpec("owner_id", "uuid", column="owner_id",
+                                  write_level="team"),
+            "account_id": FieldSpec("account_id", "uuid", column="account_id"),
+            "occurred_at": FieldSpec("occurred_at", "datetime", column="occurred_at"),
+            "kind": FieldSpec("kind", "select", column="kind",
+                              options=("email", "call", "meeting", "sms", "chat", "other")),
+            "direction": FieldSpec("direction", "select", column="direction",
+                                   options=("inbound", "outbound", "internal")),
+            "thread_id": FieldSpec("thread_id", "text", column="thread_id"),
+            "from_channel": FieldSpec("from_channel", "text", column="from_channel"),
+            "to_channels": FieldSpec("to_channels", "jsonb", column="to_channels",
+                                     filterable=False, sortable=False),
+            "subject_hash": FieldSpec("subject_hash", "text", column="subject_hash"),
+            "body": FieldSpec("body", "text", column="body", read_level="own"),
+            "external_id": FieldSpec("external_id", "text", column="external_id"),
+            "source": FieldSpec("source", "select", column="source", writable=False,
+                                options=("human", "sync", "ai")),
+        }),
+    ))
+
+    # Identity resolution -- unique on (kind, value_normalized), see
+    # server/core/identity.py's module docstring. `value_normalized` is
+    # writable through the generic path in principle, but every real writer
+    # goes through `identity.normalize_required()` first (server/core/
+    # derivation.py); nothing here enforces that at the field level, the same
+    # trust boundary every other normalized column in this platform has.
+    register(EntitySpec(
+        name="contact_channel", table="core.contact_channels",
+        label="Contact channels", label_field="value_normalized",
+        searchable=("value_normalized", "value_raw"),
+        fields=_spine({
+            "person_id": FieldSpec("person_id", "uuid", column="person_id", required=True),
+            "kind": FieldSpec("kind", "select", column="kind",
+                              options=("email", "phone", "signal", "telegram", "handle")),
+            "value_normalized": FieldSpec("value_normalized", "text",
+                                          column="value_normalized", required=True),
+            "value_raw": FieldSpec("value_raw", "text", column="value_raw"),
+            "is_primary": FieldSpec("is_primary", "boolean", column="is_primary"),
+        }),
+    ))
+
+    register(EntitySpec(
+        name="metric_fact", table="core.metric_facts", label="Metrics",
+        label_field="metric_key", searchable=("metric_key",),
+        default_sort=(("period_start", "desc"),),
+        fields=_spine({
+            "subject_type": FieldSpec("subject_type", "text", column="subject_type"),
+            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id"),
+            "period_start": FieldSpec("period_start", "date", column="period_start"),
+            "period_end": FieldSpec("period_end", "date", column="period_end"),
+            "metric_key": FieldSpec("metric_key", "text", column="metric_key",
+                                    required=True),
+            "value_numeric": FieldSpec("value_numeric", "number", column="value_numeric"),
+            "value_text": FieldSpec("value_text", "text", column="value_text"),
+            "currency": FieldSpec("currency", "text", column="currency"),
+            "source": FieldSpec("source", "select", column="source",
+                                options=("human", "sync", "ai")),
+            "confidence": FieldSpec("confidence", "number", column="confidence"),
+            "document_id": FieldSpec("document_id", "uuid", column="document_id"),
         }),
     ))
 

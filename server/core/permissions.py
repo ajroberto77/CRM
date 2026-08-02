@@ -283,6 +283,31 @@ def visibility_predicate(
     )
 
 
+def satisfies_level(principal: Principal, level: str, owner_id: Optional[str]) -> bool:
+    """The pure-Python counterpart to `visibility_predicate()`, for gating one
+    already-fetched field against one already-fetched row's `owner_id` rather
+    than compiling a WHERE clause -- what `FieldSpec.read_level` needs
+    (safety rule 10's body-owner-scoping), since by the time repository.py
+    is deciding whether to null out a field, the row is already in hand.
+    """
+    if level == "all":
+        return True
+    if level == "none":
+        return False
+    if principal.is_admin:
+        return True
+    if level == "own":
+        return owner_id is not None and str(owner_id) == principal.user_id
+    if level == "team":
+        # visibility_predicate()'s 'team' case compares the ROW's owner
+        # against the PRINCIPAL's team, which needs a lookup this function
+        # deliberately doesn't perform -- nothing needs field-level
+        # team-scoping yet, and guessing at the semantics without a real
+        # caller is exactly the premature abstraction R1 warns against.
+        raise NotImplementedError("field-level 'team' read scoping is not implemented")
+    raise ValueError(f"unknown level {level!r}")
+
+
 def mask_record(principal: Principal, obj: str, record: dict[str, Any]) -> dict[str, Any]:
     """Strip fields this principal may not read.
 

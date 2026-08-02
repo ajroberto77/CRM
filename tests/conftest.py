@@ -60,9 +60,10 @@ def _migrated() -> None:
 
 @pytest.fixture(autouse=True)
 def _no_leftover_validators():
-    """Validators are global, like events subscribers -- but unlike
-    subscribers, some are installed once per session by a module and must
-    survive every test, so a blanket reset would delete them permanently."""
+    """Validators are global. Some (e.g. modules/investor_portal's
+    commitment-closing gate) are installed once per session by a module and
+    must survive every test, so a blanket reset would delete them
+    permanently -- snapshot-then-restore removes only what a test added."""
     snapshot = registry.validator_snapshot()
     yield
     registry.restore_validators(snapshot)
@@ -70,10 +71,12 @@ def _no_leftover_validators():
 
 @pytest.fixture(autouse=True)
 def _no_leftover_subscribers():
-    """Subscribers are global. A test that registers one must not affect the
-    next, or failures appear in whichever test happens to run after it."""
+    """Subscribers are global, same shape as validators above -- some (e.g.
+    modules/investor_portal's mandate-derivation subscriber) are installed
+    once per session and must survive every test."""
+    snapshot = events.subscriber_snapshot()
     yield
-    events.reset()
+    events.restore_subscribers(snapshot)
 
 
 @pytest.fixture

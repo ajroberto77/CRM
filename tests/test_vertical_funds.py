@@ -53,7 +53,10 @@ class TestModuleSeam:
 
         vocabulary = re.compile(
             r"\b(fund|funds|commitment|commitments|lp_in|portfolio_of|vintage|"
-            r"portco|capital_call|carried_interest)\b",
+            r"portco|capital_call|carried_interest|"
+            # modules/investor_portal (M9a) -- the same rule, the same test.
+            r"mandate|questionnaire|accreditation|accredited|pathway|"
+            r"investor_categor\w*)\b",
             re.IGNORECASE,
         )
         root = pathlib.Path(__file__).resolve().parent.parent

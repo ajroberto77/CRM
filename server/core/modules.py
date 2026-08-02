@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib
 
 from server import config
-from server.core import registry
+from server.core import derivation, registry
 
 
 def install_enabled_modules() -> None:
@@ -19,6 +19,9 @@ def install_enabled_modules() -> None:
     roles, validators and tables -- in that order, since a module's roles can
     reference core entities but not the reverse."""
     registry.register_core_entities()
+    # Core behavior for core columns (person/organization.is_derived) -- not
+    # a module, so it wires in here rather than through a modules/*/install().
+    derivation.install()
     for name in config.get_enabled_modules():
         module = importlib.import_module(f"modules.{name}")
         module.install()

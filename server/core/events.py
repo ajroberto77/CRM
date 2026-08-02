@@ -117,7 +117,16 @@ def subscribe(
     (by `order`, then registration) but is deliberately not a correctness
     contract: once an M7 worker redelivers failed events, ordering between
     subscribers stops being meaningful.
+
+    Idempotent on `name`, like `registry.register_validator`: a module's
+    `install()` re-declaring the same subscriber (every real app startup and
+    every test that spins up a fresh `TestClient` both call
+    `modules.install_enabled_modules()`) must not double-register it -- a
+    second copy would run the handler twice per matching event.
     """
+    for existing in _SUBSCRIBERS:
+        if existing.name == name:
+            return
     _SUBSCRIBERS.append(_Subscriber(name, handler, entities, actions, order))
     _SUBSCRIBERS.sort(key=lambda s: s.order)
 
@@ -125,6 +134,21 @@ def subscribe(
 def reset() -> None:
     """Drop every subscriber. Tests only."""
     _SUBSCRIBERS.clear()
+
+
+def subscriber_snapshot() -> list[_Subscriber]:
+    """An opaque snapshot of the current subscriber list, for a test that
+    must not permanently delete a module-installed, session-scoped
+    subscriber (e.g. `modules/investor_portal`'s mandate-derivation
+    subscriber) the way a blanket `reset()` between tests would.
+
+    Same shape as `registry.validator_snapshot()`.
+    """
+    return list(_SUBSCRIBERS)
+
+
+def restore_subscribers(snapshot: list[_Subscriber]) -> None:
+    _SUBSCRIBERS[:] = snapshot
 
 
 def subscribers() -> list[str]:

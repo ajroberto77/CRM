@@ -464,6 +464,94 @@ TABLES: dict[str, dict[str, str]] = {
         "created_at": _CREATED,
     },
 
+    # M2's primitive: the CRM is a derived view over this log, not a system of
+    # record typed into directly (docs/DESIGN.md). `body` is owner-scoped via
+    # FieldSpec.read_level="own" in the registry -- every other column is
+    # org-wide (safety rule 10). `body`'s owner check compares against this
+    # table's own `owner_id` (the spine column every entity carries) rather
+    # than a second "whose mailbox observed this" column: they are the same
+    # fact, and a table carrying both risks them silently disagreeing.
+    # `owner_id` is NOT NULL here, unlike the spine's usual nullable default
+    # (see registry.py's `interaction` registration) -- an interaction with
+    # no owner has no one the body could ever be visible to.
+    # `account_id` has no FK yet: there is no connected-mailbox table until
+    # M4, so it stays a loose reference, forward-compatible with one once it
+    # exists.
+    "core.interactions": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid NOT NULL REFERENCES core.users(id) ON DELETE CASCADE",
+        "account_id": "uuid",
+        "occurred_at": "timestamptz NOT NULL DEFAULT now()",
+        "kind": (
+            "text NOT NULL DEFAULT 'email' "
+            "CHECK (kind IN ('email','call','meeting','sms','chat','other'))"
+        ),
+        "direction": (
+            "text NOT NULL DEFAULT 'inbound' "
+            "CHECK (direction IN ('inbound','outbound','internal'))"
+        ),
+        "thread_id": "text NOT NULL DEFAULT ''",
+        "from_channel": "text NOT NULL DEFAULT ''",
+        "to_channels": "jsonb NOT NULL DEFAULT '[]'::jsonb",
+        "subject_hash": "text NOT NULL DEFAULT ''",
+        "body": "text NOT NULL DEFAULT ''",
+        "external_id": "text NOT NULL DEFAULT ''",
+        "source": (
+            "text NOT NULL DEFAULT 'human' CHECK (source IN ('human','sync','ai'))"
+        ),
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    # Omnichannel identity resolution -- an inbound Signal message, a Telegram
+    # chat and an email thread all resolve to one person through this table.
+    # `value_normalized` is written only via server/core/identity.py's
+    # normalizers (R5); never trust a client-supplied normalized value.
+    "core.contact_channels": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "person_id": "uuid NOT NULL REFERENCES core.persons(id) ON DELETE CASCADE",
+        "kind": (
+            "text NOT NULL DEFAULT 'email' "
+            "CHECK (kind IN ('email','phone','signal','telegram','handle'))"
+        ),
+        "value_normalized": "text NOT NULL DEFAULT ''",
+        "value_raw": "text NOT NULL DEFAULT ''",
+        "is_primary": "boolean NOT NULL DEFAULT false",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    # Period-shaped data, deliberately not squeezed into `interactions` (event-
+    # shaped) or a record's `custom` (would need an expression index per
+    # metric). "Acme's Q3 EBITDA" -- there is a new one every quarter, so it is
+    # not a property of the company either.
+    "core.metric_facts": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "subject_type": "text NOT NULL DEFAULT ''",
+        "subject_id": "uuid",
+        "period_start": "date",
+        "period_end": "date",
+        "metric_key": "text NOT NULL DEFAULT ''",
+        "value_numeric": "numeric(24,4)",
+        "value_text": "text NOT NULL DEFAULT ''",
+        "currency": "text NOT NULL DEFAULT ''",
+        "source": (
+            "text NOT NULL DEFAULT 'human' CHECK (source IN ('human','sync','ai'))"
+        ),
+        "confidence": "numeric(4,3)",
+        "document_id": "uuid REFERENCES core.documents(id) ON DELETE SET NULL",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
     # The transactional outbox. Written INSIDE the repository's transaction, so
     # a record write and the event describing it commit or roll back together;
     # dispatched after commit. This is what makes an M5 subscriber that enqueues
@@ -592,6 +680,23 @@ INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_document_signers_org_document "
     "ON core.document_signers (org_id, document_id, order_index)",
 
+    "CREATE INDEX IF NOT EXISTS ix_interactions_org_thread "
+    "ON core.interactions (org_id, thread_id)",
+    "CREATE INDEX IF NOT EXISTS ix_interactions_org_occurred "
+    "ON core.interactions (org_id, occurred_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_interactions_org_owner "
+    "ON core.interactions (org_id, owner_id)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_contact_channels_org_kind_value "
+    "ON core.contact_channels (org_id, kind, value_normalized)",
+    "CREATE INDEX IF NOT EXISTS ix_contact_channels_org_person "
+    "ON core.contact_channels (org_id, person_id)",
+
+    "CREATE INDEX IF NOT EXISTS ix_metric_facts_org_subject_key "
+    "ON core.metric_facts (org_id, subject_type, subject_id, metric_key)",
+    "CREATE INDEX IF NOT EXISTS ix_metric_facts_org_period "
+    "ON core.metric_facts (org_id, period_start, period_end)",
+
     "CREATE INDEX IF NOT EXISTS ix_events_org_record "
     "ON core.events (org_id, entity, record_id, seq DESC)",
     "CREATE INDEX IF NOT EXISTS ix_events_undelivered "
@@ -613,6 +718,12 @@ INDEXES: tuple[str, ...] = (
     "ON core.notes USING gin (custom jsonb_path_ops)",
     "CREATE INDEX IF NOT EXISTS ix_documents_custom_gin "
     "ON core.documents USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_interactions_custom_gin "
+    "ON core.interactions USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_contact_channels_custom_gin "
+    "ON core.contact_channels USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_metric_facts_custom_gin "
+    "ON core.metric_facts USING gin (custom jsonb_path_ops)",
 
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_orgs_slug ON core.orgs (slug) WHERE slug <> ''",
 

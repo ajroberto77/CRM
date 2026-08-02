@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Optional
 
-from server.core import identity, passwords
+from server.core import identity, passwords, registry
 from server.db import pool
 
 
@@ -61,7 +61,15 @@ def create_org(name: str, slug: str = "") -> dict[str, Any]:
             "INSERT INTO core.orgs (id, name, slug) VALUES (%s, %s, %s) RETURNING *",
             (org_id, name, slug),
         )
-        return dict(cur.fetchone())
+        org = dict(cur.fetchone())
+
+    # After commit, not inside the org's own transaction: a seed writes
+    # through the generic repository (its own transaction, its own
+    # RLS-scoped connection), the same way an event subscriber does.
+    for seed in registry.org_seeds():
+        seed(org_id)
+
+    return org
 
 
 def get_org(org_id: str) -> Optional[dict[str, Any]]:
