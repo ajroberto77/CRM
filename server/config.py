@@ -11,7 +11,7 @@ Two kinds of settings, deliberately separated:
     comes from the environment. Changing it needs a restart.
   * Product settings (approval mode, LLM provider, sync cadence) live in
     Postgres, per org, and are hot-reloaded. They are NOT here -- see
-    server/core/settings.py once M2 lands.
+    server/core/settings.py (built in M3, on top of M2's schema).
 
 Secrets NEVER live in the database and never in a config file. They come from
 the environment and are read through get_secret(), which exists so there is one

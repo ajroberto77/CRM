@@ -48,21 +48,19 @@ adapter's module docstring for vendor-specific gotchas found during research.
 
 ## Retry
 
-`_request_with_retry()` below is the one retry implementation every adapter
-shares (R1) -- urllib-based, retrying on 429/503/504 and honoring
-`Retry-After` where a vendor sends one, matching Cal's `http_retry.py`
-shape. When the LLM router (M3) needs the same mechanics, this is what moves
-into a shared `server/net/http_retry.py`; until then, one copy here is exactly
-one copy, not zero and not two.
+`_request_with_retry()` below is a thin, esign-specific wrapper over
+`server/net/http_retry.py`'s shared transport mechanics (R1) -- the LLM
+router (M3) uses the same shared module directly. This wrapper exists only
+to translate a bare HTTP 409 into `NotReadyError`, which is meaningful to
+e-signature vendors (Dropbox Sign's documented "the executed PDF isn't
+generated yet") and to no other axis.
 """
 from __future__ import annotations
 
-import json as jsonlib
-import time
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Any, Optional
+
+from server.net import http_retry
 
 PROVIDERS = ("docusign", "dropboxsign", "pandadoc", "adobesign")
 
@@ -113,10 +111,7 @@ def _validate_status(status: str) -> str:
     return status
 
 
-# ── Shared retry mechanics (R1 -- one implementation, all four adapters use it) ──
-
-_RETRYABLE = (429, 500, 502, 503, 504)
-
+# ── Retry (thin wrapper over server/net/http_retry.py -- see module docstring) ──
 
 def _request_with_retry(
     method: str,
@@ -128,37 +123,15 @@ def _request_with_retry(
     max_retries: int = 5,
     raw: bool = False,
 ) -> Any:
-    """One HTTP call with retry on 429/5xx, honoring Retry-After when a vendor
-    sends one and falling back to exponential backoff otherwise. Returns
-    parsed JSON unless `raw=True`, in which case it returns the response
-    bytes (for a downloaded PDF).
-    """
-    last_error: Optional[Exception] = None
-    for attempt in range(max_retries):
-        req = urllib.request.Request(url, data=data, headers=headers, method=method)
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                body = resp.read()
-                return body if raw else jsonlib.loads(body.decode("utf-8") or "{}")
-        except urllib.error.HTTPError as exc:
-            body = exc.read()
-            if exc.code == 409:
-                raise NotReadyError(
-                    f"{method} {url}: 409 -- document not ready yet"
-                ) from exc
-            if exc.code not in _RETRYABLE or attempt == max_retries - 1:
-                detail = body.decode("utf-8", "replace")[:500]
-                raise EsignError(f"{method} {url} failed: HTTP {exc.code}: {detail}") from exc
-            retry_after = exc.headers.get("Retry-After") if exc.headers else None
-            delay = float(retry_after) if retry_after and retry_after.isdigit() else min(2 ** attempt, 30)
-            last_error = exc
-            time.sleep(delay)
-        except urllib.error.URLError as exc:
-            if attempt == max_retries - 1:
-                raise EsignError(f"{method} {url} failed: {exc}") from exc
-            last_error = exc
-            time.sleep(min(2 ** attempt, 30))
-    raise EsignError(f"{method} {url} failed after {max_retries} attempts") from last_error
+    try:
+        return http_retry.request_with_retry(
+            method, url, headers=headers, data=data, timeout=timeout,
+            max_retries=max_retries, raw=raw,
+        )
+    except http_retry.HTTPRetryError as exc:
+        if exc.status_code == 409:
+            raise NotReadyError(f"{method} {url}: 409 -- document not ready yet") from exc
+        raise EsignError(str(exc)) from exc
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────────────

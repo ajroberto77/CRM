@@ -20,9 +20,12 @@ from pydantic import BaseModel, Field
 
 from server import config
 from server.api import auth, records
+from server.api import settings as settings_api
 from server.core import associations, modules, passwords, permissions, query, registry, repository, sessions, users
+from server.core import settings as core_settings
 from server.core.permissions import Principal
 from server.db import pool, schema
+from server.llm import router as llm_router
 
 
 class RlsNotEnforced(RuntimeError):
@@ -65,6 +68,7 @@ app = FastAPI(title="CRM", version="0.1.0", lifespan=lifespan)
 
 app.include_router(records.router)
 app.include_router(records.association_router)
+app.include_router(settings_api.router)
 
 
 # ── Errors ───────────────────────────────────────────────────────────────────
@@ -86,6 +90,8 @@ def _forbidden(request: Request, exc: Exception) -> Response:
 @app.exception_handler(registry.UnknownField)
 @app.exception_handler(query.FilterError)
 @app.exception_handler(associations.AssociationError)
+@app.exception_handler(core_settings.UnknownSection)
+@app.exception_handler(llm_router.LLMError)
 def _bad_request(request: Request, exc: Exception) -> Response:
     return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(exc)})
 

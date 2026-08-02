@@ -18,6 +18,7 @@ export default defineConfig({
       '/users': API_TARGET,
       '/roles': API_TARGET,
       '/health': API_TARGET,
+      '/settings': API_TARGET,
     },
   },
 })

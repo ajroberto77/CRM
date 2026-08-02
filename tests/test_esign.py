@@ -55,30 +55,11 @@ class TestDispatch:
 
 
 class TestRetryHelper:
-    def test_retries_on_429_then_succeeds(self):
-        import urllib.error
-
-        calls = {"n": 0}
-
-        def fake_urlopen(req, timeout=None):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                err = urllib.error.HTTPError(
-                    req.full_url, 429, "rate limited", {"Retry-After": "0"},
-                    __import__("io").BytesIO(b"{}"),
-                )
-                raise err
-            return mock.Mock(
-                __enter__=lambda s: s, __exit__=lambda *a: None,
-                read=lambda: b'{"ok": true}',
-            )
-
-        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
-            result = esign._request_with_retry(
-                "GET", "https://example.test/x", headers={}, max_retries=3,
-            )
-        assert result == {"ok": True}
-        assert calls["n"] == 2
+    """`_request_with_retry` is now a thin wrapper over
+    server/net/http_retry.py's shared transport mechanics -- see
+    tests/test_http_retry.py for retry/backoff/status-code coverage. This
+    class only covers the one thing that stays esign-specific: translating
+    a bare 409 into NotReadyError."""
 
     def test_409_raises_not_ready_without_retrying(self):
         import io
@@ -97,14 +78,11 @@ class TestRetryHelper:
                 esign._request_with_retry("GET", "https://example.test/x", headers={})
         assert calls["n"] == 1, "409 must not be retried -- it means 'not yet', not 'transient'"
 
-    def test_non_retryable_error_raises_immediately(self):
+    def test_a_non_409_failure_becomes_a_plain_esign_error(self):
         import io
         import urllib.error
 
-        calls = {"n": 0}
-
         def fake_urlopen(req, timeout=None):
-            calls["n"] += 1
             raise urllib.error.HTTPError(
                 req.full_url, 401, "unauthorized", {}, io.BytesIO(b"{}")
             )
@@ -112,7 +90,6 @@ class TestRetryHelper:
         with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
             with pytest.raises(esign.EsignError):
                 esign._request_with_retry("GET", "https://example.test/x", headers={})
-        assert calls["n"] == 1
 
 
 class TestDocuSignJwt:

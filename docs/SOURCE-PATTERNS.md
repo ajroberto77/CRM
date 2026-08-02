@@ -100,7 +100,7 @@ that raises `NotSupportedError`.
 | `messaging.py` | signal-cli invocation shape: `-u` and `-o json` are **global** flags preceding the subcommand; quote-reply threading via `--quote-timestamp`/`--quote-author` | Direct port |
 | `messaging.py` | Rate-gated `libsignal*` temp-dir cleanup | Direct port |
 | `reply_loop.py` | The command dispatch and its safety rules (below) | Owner check becomes a `contact_channels` → `users` lookup |
-| `classify.py` | `_call_openai_compatible()` — one call shape for OpenAI, vLLM, LM Studio; strict-mode JSON Schema; `_prime_ollama()` for `num_ctx`/`keep_alive` | **Prefer JA's version over Cal's** where they diverge |
+| `classify.py` | Same five providers as Cal's `extract.py` (ollama/openai/anthropic/gemini/claudecode), confirming the shape -- but **no cross-provider fallback chain and no tests**. Neither `_call_openai_compatible()` nor `_prime_ollama()` exists in JA or Cal (a prior inaccuracy in this doc); M3 (`server/llm/`) ported from **Cal's `extract.py`**, the one with a real, tested `ProviderUnavailable`-driven fallback chain | Not ported from here -- see Cal's row above |
 | `state_db.py` | Migration pattern (table dicts, `ALTER TABLE ADD COLUMN` if missing) — Cal ported this from here | Re-expressed for Postgres |
 | `contacts_db.py` | Free-text roles; **`aliases`** so an LLM can resolve "her"/"mom"/"the mediator" to real people | Aliases generalize to entity resolution for LLM context |
 

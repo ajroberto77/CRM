@@ -552,6 +552,23 @@ TABLES: dict[str, dict[str, str]] = {
         "updated_at": _CREATED,
     },
 
+    # Per-org product settings (server/core/settings.py), one row per
+    # (org_id, section). Not a registered entity (R4) -- a settings section is
+    # a singleton an admin edits in place, not a list of records a
+    # table/detail UI would browse, and the read-merge-write discipline
+    # (safety rule 2) doesn't fit the generic repository's per-column merge
+    # semantics. `id` is a synthetic PK (schema.py's DDL generator only
+    # supports a single-column PK); the real identity constraint is the
+    # unique index on (org_id, section) below.
+    "core.settings": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "section": "text NOT NULL DEFAULT ''",
+        "values": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "updated_at": _CREATED,
+        "updated_by": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+    },
+
     # The transactional outbox. Written INSIDE the repository's transaction, so
     # a record write and the event describing it commit or roll back together;
     # dispatched after commit. This is what makes an M5 subscriber that enqueues
@@ -696,6 +713,9 @@ INDEXES: tuple[str, ...] = (
     "ON core.metric_facts (org_id, subject_type, subject_id, metric_key)",
     "CREATE INDEX IF NOT EXISTS ix_metric_facts_org_period "
     "ON core.metric_facts (org_id, period_start, period_end)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_settings_org_section "
+    "ON core.settings (org_id, section)",
 
     "CREATE INDEX IF NOT EXISTS ix_events_org_record "
     "ON core.events (org_id, entity, record_id, seq DESC)",
