@@ -11,7 +11,9 @@ from __future__ import annotations
 import importlib
 
 from server import config
-from server.core import derivation, registry, scheduling_pipeline
+from server.core import (
+    deal_activity, derivation, interaction_embeddings, registry, scheduling_pipeline,
+)
 
 
 def install_enabled_modules() -> None:
@@ -25,6 +27,12 @@ def install_enabled_modules() -> None:
     # M5: interaction -> scheduling extraction -> approval queue -> calendar
     # write. Also core, same reasoning.
     scheduling_pipeline.install()
+    # M7: keeps core.deals.last_activity_at current -- the one signal deal
+    # rotting (registry.py's deal entity) reads. Also core, same reasoning.
+    deal_activity.install()
+    # M7: interaction -> embed_interaction job -> ai.embeddings. Also core,
+    # same reasoning.
+    interaction_embeddings.install()
     for name in config.get_enabled_modules():
         module = importlib.import_module(f"modules.{name}")
         module.install()

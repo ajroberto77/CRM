@@ -23,11 +23,13 @@ from server.api import accounts as accounts_api
 from server.api import auth, records
 from server.api import channels as channels_api
 from server.api import proposals as proposals_api
+from server.api import search as search_api
 from server.api import settings as settings_api
 from server.core import account_link, associations, modules, passwords, permissions, query, registry, repository, sessions, users
 from server.core import settings as core_settings
 from server.core.permissions import Principal
 from server.db import pool, schema
+from server.llm import embeddings as embeddings_llm
 from server.llm import router as llm_router
 
 
@@ -75,6 +77,7 @@ app.include_router(settings_api.router)
 app.include_router(accounts_api.router)
 app.include_router(channels_api.router)
 app.include_router(proposals_api.router)
+app.include_router(search_api.router)
 
 
 # ── Errors ───────────────────────────────────────────────────────────────────
@@ -98,6 +101,7 @@ def _forbidden(request: Request, exc: Exception) -> Response:
 @app.exception_handler(associations.AssociationError)
 @app.exception_handler(core_settings.UnknownSection)
 @app.exception_handler(llm_router.LLMError)
+@app.exception_handler(embeddings_llm.EmbeddingError)
 @app.exception_handler(account_link.LinkError)
 def _bad_request(request: Request, exc: Exception) -> Response:
     return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(exc)})

@@ -64,9 +64,13 @@ class ValidationError(ValueError):
     repair-retry path as extraction failures (safety rule 6)."""
 
 
-def _finalize_read(principal: Principal, entity: str, record: dict[str, Any]) -> dict[str, Any]:
+def _finalize_read(
+    principal: Principal, entity: str, record: dict[str, Any],
+    *, context: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """The one place a row is prepared for return to a caller -- role-level
-    field masking, then row-owner field scoping (safety rule 10).
+    field masking, row-owner field scoping (safety rule 10), then computed
+    fields.
 
     `mask_record()` handles role-level masks, uniform across every row of an
     entity. `FieldSpec.read_level` is a second, orthogonal check on top of
@@ -75,6 +79,9 @@ def _finalize_read(principal: Principal, entity: str, record: dict[str, Any]) ->
     Applied at every point a row leaves the repository -- list/get/fetch AND
     the row create()/update() hand back -- so an editor without ownership
     cannot see a body-like field in a write response either.
+
+    `context` is `spec.context_builder(principal)`'s result, built once by
+    the caller (never per row) and passed to every field's own `compute()`.
     """
     record = permissions.mask_record(principal, entity, record)
     owner_id = record.get("owner_id")
@@ -82,7 +89,16 @@ def _finalize_read(principal: Principal, entity: str, record: dict[str, Any]) ->
         if fspec.read_level and name in record:
             if not permissions.satisfies_level(principal, fspec.read_level, owner_id):
                 record[name] = None
+        if fspec.compute is not None:
+            record[name] = fspec.compute(record, context or {})
     return record
+
+
+def _context_for(principal: Principal, entity: str) -> dict[str, Any]:
+    spec = registry.entity(entity)
+    if spec.context_builder is None:
+        return {}
+    return spec.context_builder(principal)
 
 
 # ── Custom-field context ─────────────────────────────────────────────────────
@@ -321,7 +337,10 @@ def list_records(
             f"WHERE {where} {order.sql} LIMIT %s OFFSET %s",
             params + order.params + [limit, max(0, int(offset))],
         )
-        rows = [_finalize_read(principal, entity, dict(r)) for r in cur.fetchall()]
+        context = _context_for(principal, entity)
+        rows = [
+            _finalize_read(principal, entity, dict(r), context=context) for r in cur.fetchall()
+        ]
 
         # Counted under the same predicate. A count that ignores visibility
         # leaks how many rows the principal cannot see.
@@ -362,7 +381,7 @@ def get_record(principal: Principal, entity: str, record_id: str) -> dict[str, A
         row = cur.fetchone()
     if row is None:
         raise NotFound(f"no {entity} {record_id}")
-    return _finalize_read(principal, entity, dict(row))
+    return _finalize_read(principal, entity, dict(row), context=_context_for(principal, entity))
 
 
 def fetch_many(
@@ -390,7 +409,10 @@ def fetch_many(
             f"WHERE t.id = ANY(%s::uuid[]) AND ({visible_sql})",
             [ids] + list(visible_params),
         )
-        rows = [_finalize_read(principal, entity, dict(r)) for r in cur.fetchall()]
+        context = _context_for(principal, entity)
+        rows = [
+            _finalize_read(principal, entity, dict(r), context=context) for r in cur.fetchall()
+        ]
     return {str(r["id"]): r for r in rows}
 
 
@@ -443,7 +465,7 @@ def create(
         event_id = events.record_event(cur, event)
 
     _publish(event, event_id)
-    return _finalize_read(principal, entity, row)
+    return _finalize_read(principal, entity, row, context=_context_for(principal, entity))
 
 
 def update(
@@ -524,7 +546,7 @@ def update(
         event_id = events.record_event(cur, event)
 
     _publish(event, event_id)
-    return _finalize_read(principal, entity, after)
+    return _finalize_read(principal, entity, after, context=_context_for(principal, entity))
 
 
 def delete(principal: Principal, entity: str, record_id: str) -> bool:

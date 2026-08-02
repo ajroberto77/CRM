@@ -22,6 +22,7 @@ export default defineConfig({
       '/accounts': API_TARGET,
       '/channels': API_TARGET,
       '/proposals': API_TARGET,
+      '/search': API_TARGET,
     },
   },
 })

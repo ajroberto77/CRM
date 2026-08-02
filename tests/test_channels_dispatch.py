@@ -9,7 +9,7 @@ from unittest import mock
 import pytest
 
 from server.channels import dispatch, signal_cli, telegram
-from server.core import user_channels
+from server.core import user_channels, users
 
 
 class TestSend:
@@ -49,19 +49,19 @@ class TestSend:
 
 
 class TestReceiveCommands:
-    def test_resolves_a_known_sender_to_their_user_id(self, org_id, admin):
+    def test_resolves_a_known_sender_to_their_org_and_user_id(self, org_id, admin):
         user_channels.link_channel(org_id, str(admin["id"]), "signal", "+15550100123")
         with mock.patch.object(
             signal_cli, "receive_commands", return_value=[("+15550100123", "yes", None)],
         ), mock.patch.object(telegram, "receive_commands", return_value=[]):
-            commands = dispatch.receive_commands(org_id)
-        assert commands == [(str(admin["id"]), "yes", None)]
+            commands = dispatch.receive_commands()
+        assert commands == [(org_id, str(admin["id"]), "yes", None)]
 
     def test_an_unrecognized_sender_is_dropped(self, org_id):
         with mock.patch.object(
             signal_cli, "receive_commands", return_value=[("+19995550000", "yes", None)],
         ), mock.patch.object(telegram, "receive_commands", return_value=[]):
-            commands = dispatch.receive_commands(org_id)
+            commands = dispatch.receive_commands()
         assert commands == []
 
     def test_one_providers_failure_does_not_stop_the_others_poll(self, org_id, admin):
@@ -71,8 +71,8 @@ class TestReceiveCommands:
         ), mock.patch.object(
             telegram, "receive_commands", return_value=[("somehandle", "no", "7")],
         ):
-            commands = dispatch.receive_commands(org_id)
-        assert commands == [(str(admin["id"]), "no", "7")]
+            commands = dispatch.receive_commands()
+        assert commands == [(org_id, str(admin["id"]), "no", "7")]
 
     def test_commands_from_both_providers_are_combined(self, org_id, admin, member):
         user_channels.link_channel(org_id, str(admin["id"]), "signal", "+15550100123")
@@ -82,9 +82,32 @@ class TestReceiveCommands:
         ), mock.patch.object(
             telegram, "receive_commands", return_value=[("member", "no", None)],
         ):
-            commands = dispatch.receive_commands(org_id)
-        assert (str(admin["id"]), "yes", None) in commands
-        assert (str(member["id"]), "no", None) in commands
+            commands = dispatch.receive_commands()
+        assert (org_id, str(admin["id"]), "yes", None) in commands
+        assert (org_id, str(member["id"]), "no", None) in commands
+
+    def test_a_sender_is_resolved_against_every_org_not_just_one(self, org_id, admin):
+        """The regression this guards: `receive_commands()` used to take an
+        `org_id` and be called once per org by `message_poller.py`, which
+        drained each provider's non-replayable queue on the first org's
+        turn and silently lost every other org's commands. It now polls
+        each provider once and resolves the sender against every org --
+        exercised here with the sender linked in a SECOND org, not the
+        first one `all_org_ids()` would try."""
+        second_org = users.create_org("Second Org", "second-dispatch-org")
+        second_org_id = str(second_org["id"])
+        second_admin = users.create_user(
+            second_org_id, email="admin2@example.com", name="Admin Two",
+            password="correct-horse-battery", is_admin=True,
+        )
+        user_channels.link_channel(
+            second_org_id, str(second_admin["id"]), "signal", "+15550199999"
+        )
+        with mock.patch.object(
+            signal_cli, "receive_commands", return_value=[("+15550199999", "yes", None)],
+        ), mock.patch.object(telegram, "receive_commands", return_value=[]):
+            commands = dispatch.receive_commands()
+        assert commands == [(second_org_id, str(second_admin["id"]), "yes", None)]
 
 
 class TestUnknownProvider:

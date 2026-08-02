@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useEntityList } from '../records/useEntitySchema'
+import { CommandPalette } from '../command/CommandPalette'
 
 export function Shell() {
   const { user, logout } = useAuth()
@@ -8,6 +9,7 @@ export function Shell() {
 
   return (
     <div className="crm-shell">
+      <CommandPalette />
       <div className="crm-titlebar">
         <div className="crm-titlebar-logo">CRM</div>
         <div className="crm-titlebar-spacer" />

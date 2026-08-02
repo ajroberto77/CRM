@@ -9,6 +9,14 @@ nothing of its own to gate here: receiving and acting on an inbound
 command is not a destructive default-off path, only a real outbound
 Signal/Telegram message is.
 
+`dispatch.receive_commands()` is called exactly ONCE per cycle, with no
+per-org loop here: it polls each provider's deployment-wide inbound queue
+a single time and resolves every returned sender to its own org
+internally (see its own docstring) -- looping org_ids around the call, the
+way `sync_poller.py`'s per-account loop does for connected accounts, would
+drain each provider's non-replayable queue on the first org's turn and
+silently lose every other org's commands.
+
 Each command is processed in its own try/except: a command returned by
 `receive_commands()` has already been consumed at the provider (signal-
 cli's `receive`/Telegram's `getUpdates` offset both acknowledge on
@@ -24,21 +32,22 @@ from __future__ import annotations
 
 import time
 
-from server import jobs
 from server.channels import commands, dispatch
 
 _DEFAULT_INTERVAL_SECONDS = 15
 
 
 def poll_once() -> None:
-    for org_id in jobs.all_org_ids():
-        for user_id, text, quoted_id in dispatch.receive_commands(org_id):
-            try:
-                commands.dispatch_command(org_id, user_id, text, quoted_id)
-            except Exception as exc:  # noqa: BLE001 -- see module docstring: this command is
-                # already consumed and cannot be retried, so one failure must not stop the
-                # rest of this batch from being processed.
-                print(f"[message_poller] ERROR processing a command from user {user_id}: {exc}")
+    for org_id, user_id, text, quoted_id in dispatch.receive_commands():
+        try:
+            commands.dispatch_command(org_id, user_id, text, quoted_id)
+        except Exception as exc:  # noqa: BLE001 -- see module docstring: this command is
+            # already consumed and cannot be retried, so one failure must not stop the
+            # rest of this batch from being processed.
+            print(
+                f"[message_poller] ERROR processing a command from user {user_id} "
+                f"(org {org_id}): {exc}"
+            )
 
 
 def run_forever(interval_seconds: int = _DEFAULT_INTERVAL_SECONDS) -> None:

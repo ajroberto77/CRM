@@ -32,6 +32,8 @@ from __future__ import annotations
 
 from typing import Iterable, Optional
 
+import psycopg2.errors
+
 from server.db import pool
 
 # Logical schemas. One database; these keep the namespaces apart.
@@ -59,6 +61,21 @@ UNSCOPED_TABLES = frozenset(
         # token hash -> which tenant/user. Same reasoning: the bearer token is
         # what identifies the org, so its lookup cannot be org-scoped.
         "auth.sessions",
+        # M7's work queue (server/jobs/queue.py). A single generic worker
+        # pool claims a batch across EVERY org in one query -- the same
+        # tension `all_org_ids()` (server/jobs/__init__.py) already found
+        # and documented: an org-scoped table is invisible to a query with
+        # no tenant GUC set, so a claim query could never see more than
+        # zero rows if this carried org_id under the normal RLS predicate.
+        # Mirrors CATO's own `cato_coordinator` database, deliberately
+        # separate from each pipeline's real domain output: coordination
+        # data (which job is pending/claimed/done) lives outside the
+        # tenant boundary; every payload that touches real tenant data
+        # carries its own `org_id` key, and a handler opens its own
+        # `pool.transaction(org_id=...)` to do that work -- queue.py
+        # itself never does.
+        "jobs.work_queue",
+        "jobs.workers",
     }
 )
 
@@ -88,6 +105,17 @@ VISIBILITY_LEVELS = ("all", "team", "own", "none")
 _UUID_PK = "uuid PRIMARY KEY DEFAULT gen_random_uuid()"
 _ORG_FK = "uuid NOT NULL REFERENCES core.orgs(id) ON DELETE CASCADE"
 _CREATED = "timestamptz NOT NULL DEFAULT now()"
+
+# M7's pgvector search (`ai.embeddings`). pgvector's HNSW index requires
+# every indexed vector to share one fixed dimension, so this is a single
+# platform-wide choice, not a per-org setting -- changing it means
+# dropping and rebuilding the column and every stored embedding.
+# 768 matches Ollama's default embedding model (nomic-embed-text);
+# `server/llm/embeddings.py` explicitly requests this many dimensions
+# from OpenAI too (its v3 embedding models support a `dimensions`
+# parameter for exactly this kind of truncation), so both providers
+# write into the same column shape.
+EMBEDDING_DIM = 768
 
 
 def _level(column: str, default: str) -> str:
@@ -590,6 +618,17 @@ TABLES: dict[str, dict[str, str]] = {
         "actor_user_id": "uuid",
         "actor_kind": "text NOT NULL DEFAULT 'user'",
         "diff": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        # M7's event redelivery (server/jobs -- draining this outbox for
+        # at-least-once delivery) needs the full record, not just the
+        # diff: a CREATE's diff is always empty, and an UPDATE's diff
+        # only carries the CHANGED fields, not the unchanged ones a
+        # subscriber like derivation.py's `event.after.get("kind")` also
+        # reads. Without these, redelivery would hand every subscriber an
+        # empty/partial record and silently do nothing. Populated from
+        # the same before/after dicts record_event()'s caller already
+        # holds in memory -- no second read.
+        "before_snapshot": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "after_snapshot": "jsonb NOT NULL DEFAULT '{}'::jsonb",
         "caused_by_event_id": "uuid",
         "delivery_state": (
             "text NOT NULL DEFAULT 'pending' "
@@ -764,6 +803,72 @@ TABLES: dict[str, dict[str, str]] = {
         "value_raw": "text NOT NULL DEFAULT ''",
         "created_at": _CREATED,
         "updated_at": _CREATED,
+    },
+
+    # M7's one generic work queue (server/jobs/queue.py) -- one table
+    # across every job type, a deliberate deviation from CATO's one-
+    # queue-table-per-job-type pattern: CATO's own two pipelines are
+    # high-volume and homogeneous, this platform's job types are
+    # low-volume and heterogeneous, so a shared table avoids a schema
+    # migration per new job type. Unscoped (see UNSCOPED_TABLES above).
+    "jobs.work_queue": {
+        "id": _UUID_PK,
+        "job_type": "text NOT NULL DEFAULT ''",
+        "payload": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "status": (
+            "text NOT NULL DEFAULT 'pending' "
+            "CHECK (status IN ('pending','claimed','done','failed','dead_letter'))"
+        ),
+        "claimed_by": "text NOT NULL DEFAULT ''",
+        "claimed_at": "timestamptz",
+        "attempts": "integer NOT NULL DEFAULT 0",
+        "max_attempts": "integer NOT NULL DEFAULT 5",
+        # A failed item becomes reclaimable only once its backoff has
+        # elapsed -- also doubles as "not yet due" scheduling for a
+        # future enqueue-for-later caller, at no extra cost.
+        "available_at": "timestamptz NOT NULL DEFAULT now()",
+        "last_error": "text NOT NULL DEFAULT ''",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    # Heartbeat/liveness only (CATO's own dist_fetch/worker_lib.py
+    # finding, ported: this table does not drive claiming, claim_batch()
+    # never joins against it). worker_id embeds hostname+pid so a
+    # restart is a new identity; reaped past a stale-heartbeat threshold
+    # on every worker startup, same as CATO.
+    "jobs.workers": {
+        "worker_id": "text PRIMARY KEY",
+        "status": "text NOT NULL DEFAULT 'running'",
+        "last_heartbeat": _CREATED,
+        "started_at": _CREATED,
+        "stop_requested": "boolean NOT NULL DEFAULT false",
+    },
+
+    # M7's pgvector search. `owner_type`/`owner_id` names the record this
+    # chunk was derived from (e.g. "interaction"); `content_text` is the
+    # chunk itself, kept alongside the vector so a search result can show
+    # a snippet without a second fetch. `visibility_user_id` is safety
+    # rule 10, non-negotiable: null for org-wide content, set to the
+    # source interaction's owner for anything body-derived -- retrieval
+    # (server/api/search.py) filters on this, or semantic search quietly
+    # becomes a way to read other people's mail. Unique on
+    # (org_id, owner_type, owner_id, chunk_kind, content_hash) makes a
+    # re-embed idempotent; a model change is a backfill, not a migration.
+    "ai.embeddings": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_type": "text NOT NULL DEFAULT ''",
+        "owner_id": "uuid NOT NULL",
+        "visibility_user_id": "uuid REFERENCES core.users(id) ON DELETE CASCADE",
+        "chunk_kind": "text NOT NULL DEFAULT ''",
+        "chunk_index": "integer NOT NULL DEFAULT 0",
+        "content_hash": "text NOT NULL DEFAULT ''",
+        "content_text": "text NOT NULL DEFAULT ''",
+        "model": "text NOT NULL DEFAULT ''",
+        "dim": "integer NOT NULL DEFAULT 0",
+        "embedding": f"vector({EMBEDDING_DIM})",
+        "created_at": _CREATED,
     },
 
 }
@@ -963,6 +1068,27 @@ INDEXES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_user_channels_org_user "
     "ON core.user_channels (org_id, user_id)",
 
+    # jobs.work_queue is unscoped (see UNSCOPED_TABLES) -- claimed across
+    # every org by one generic worker pool, so it has no org_id to lead
+    # with. This is CATO's own measured finding (~5400x on this exact
+    # claim-query shape): without (status, available_at) leading the
+    # index, the claim query's ORDER BY forces a full scan.
+    "CREATE INDEX IF NOT EXISTS ix_work_queue_status_available "
+    "ON jobs.work_queue (status, available_at)",
+    "CREATE INDEX IF NOT EXISTS ix_work_queue_job_type_status "
+    "ON jobs.work_queue (job_type, status)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_embeddings_org_owner_chunk "
+    "ON ai.embeddings (org_id, owner_type, owner_id, chunk_kind, content_hash)",
+    "CREATE INDEX IF NOT EXISTS ix_embeddings_org_owner "
+    "ON ai.embeddings (org_id, owner_type, owner_id)",
+    # Single-column (the vector itself), so verify_index_leading_org()
+    # correctly ignores it -- same reasoning as the custom-fields GIN
+    # indexes above. Cosine distance: the standard choice for both
+    # providers' sentence-embedding models.
+    "CREATE INDEX IF NOT EXISTS ix_embeddings_hnsw_cosine "
+    "ON ai.embeddings USING hnsw (embedding vector_cosine_ops)",
+
 )
 
 # ── Row-level security ───────────────────────────────────────────────────────
@@ -1114,9 +1240,38 @@ def _pk_clause(table: str, columns: dict[str, str]) -> str:
     return f"CREATE TABLE IF NOT EXISTS {table} ({pk_name} {pk_decl})"
 
 
+class VectorExtensionMissing(RuntimeError):
+    """`CREATE EXTENSION vector` requires a superuser -- the app's own role
+    deliberately never is one (see this module's own docstring and safety
+    rule: "the app's database role must never have BYPASSRLS and must
+    never be a superuser"). A DBA runs `CREATE EXTENSION vector;` once, as
+    a superuser, before first boot -- the same one-time bootstrap category
+    as creating the database and the app role itself."""
+
+
 def _ensure_schemas(cur) -> None:
     for name in SCHEMAS:
         cur.execute(f"CREATE SCHEMA IF NOT EXISTS {name}")
+
+
+def _ensure_vector_extension(cur) -> None:
+    """Read-check-then-create, not a bare `CREATE EXTENSION IF NOT EXISTS`
+    -- an already-installed extension must never even attempt the
+    superuser-only path, or a deployment that already did the one-time
+    DBA step would still fail to boot under the app's own (correctly
+    unprivileged) role."""
+    cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+    if cur.fetchone() is not None:
+        return
+    try:
+        cur.execute("CREATE EXTENSION vector")
+    except psycopg2.errors.InsufficientPrivilege as exc:
+        raise VectorExtensionMissing(
+            "the 'vector' extension (pgvector) is not installed, and this "
+            "role correctly cannot create it. Ask a DBA to run "
+            "`CREATE EXTENSION vector;` once, as a superuser, against this "
+            "database, then restart."
+        ) from exc
 
 
 def _ensure_table(cur, table: str, columns: dict[str, str]) -> None:
@@ -1151,6 +1306,7 @@ def migrate(*, tables: Optional[Iterable[str]] = None) -> None:
     wanted = list(tables) if tables is not None else list(every)
     with pool.system_transaction() as cur:
         _ensure_schemas(cur)
+        _ensure_vector_extension(cur)
         # Functions precede indexes: the promoted custom-field indexes in
         # server/core/custom_fields.py are expressions over them.
         for statement in FUNCTIONS:
@@ -1215,7 +1371,13 @@ def verify_index_leading_org() -> list[dict[str, object]]:
     `org_id`. Not every such index is wrong -- core.sessions is looked up by
     token before any org context exists -- so this reports rather than raises,
     and known exceptions are listed here explicitly."""
-    allowed = {"uq_sessions_token", "uq_orgs_slug"}
+    allowed = {
+        "uq_sessions_token", "uq_orgs_slug",
+        # jobs.work_queue is unscoped (UNSCOPED_TABLES) -- claimed across
+        # every org by one generic worker pool, so it has no org_id
+        # column to lead with at all.
+        "ix_work_queue_status_available", "ix_work_queue_job_type_status",
+    }
     problems: list[dict[str, object]] = []
     with pool.system_transaction() as cur:
         cur.execute(

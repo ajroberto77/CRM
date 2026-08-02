@@ -101,11 +101,20 @@ def test_every_scoped_table_has_a_policy_predicate():
     assert set(schema.RLS_PREDICATES) == set(schema.TABLES) - schema.UNSCOPED_TABLES
 
 
-def test_the_unscoped_set_is_exactly_the_identity_layer():
-    """A tripwire on the one deliberate hole in tenant isolation. Adding a
-    table here must be a conscious, reviewed act -- not something that happens
-    because a policy was inconvenient."""
-    assert schema.UNSCOPED_TABLES == {"auth.identities", "auth.sessions"}
+def test_the_unscoped_set_is_exactly_these_deliberate_holes():
+    """A tripwire on every deliberate hole in tenant isolation. Adding a
+    table here must be a conscious, reviewed act -- not something that
+    happens because a policy was inconvenient. Two shapes justify it,
+    each with its own comment in schema.py's UNSCOPED_TABLES: the auth
+    layer (`auth.identities`/`auth.sessions`, which must be readable
+    before any tenant context exists at all -- it's what establishes
+    that context), and M7's work queue (`jobs.work_queue`/`jobs.workers`,
+    genuinely global coordination data a single worker pool claims
+    across every org in one query, mirroring CATO's own separate
+    coordinator database)."""
+    assert schema.UNSCOPED_TABLES == {
+        "auth.identities", "auth.sessions", "jobs.work_queue", "jobs.workers",
+    }
 
 
 def test_identity_tables_carry_no_credentials_or_profile():
@@ -113,5 +122,5 @@ def test_identity_tables_carry_no_credentials_or_profile():
     that decision. It must hold routing information only -- no password hash,
     no name, no profile."""
     forbidden = {"password_hash", "name", "email_raw", "custom"}
-    for table in schema.UNSCOPED_TABLES:
+    for table in ("auth.identities", "auth.sessions"):
         assert not (set(schema.TABLES[table]) & forbidden), table

@@ -193,11 +193,13 @@ def record_event(cur, event: RecordEvent) -> Optional[str]:
         return None
     cur.execute(
         "INSERT INTO core.events "
-        "  (org_id, entity, record_id, action, actor_user_id, actor_kind, diff) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb) RETURNING id",
+        "  (org_id, entity, record_id, action, actor_user_id, actor_kind, diff, "
+        "   before_snapshot, after_snapshot) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb) RETURNING id",
         (
             event.org_id, event.entity, event.record_id, event.action,
             event.actor_user_id, event.actor_kind, json.dumps(_json_safe(event.diff)),
+            json.dumps(_json_safe(event.before)), json.dumps(_json_safe(event.after)),
         ),
     )
     row = cur.fetchone()
@@ -268,3 +270,66 @@ def mark_delivered(event_id: str, org_id: str) -> None:
             "WHERE id = %s AND delivery_state = 'pending'",
             (event_id,),
         )
+
+
+def find_undelivered(org_id: str, grace_seconds: int, limit: int = 500) -> list[dict[str, Any]]:
+    """Every event row still `pending` or `failed` whose `occurred_at` is
+    older than `grace_seconds` -- old enough that its original synchronous
+    dispatch (if any) has long since had its chance, so re-dispatching it
+    now cannot race the write that created it. `pending` here does not
+    mean "known to have failed" -- nothing marks a row `delivered` on the
+    normal synchronous happy path (see the module docstring's "Delivery
+    guarantee" section), so this is the confirming second pass that
+    guarantees at least one delivery actually completed."""
+    from server.db import pool
+
+    with pool.transaction(org_id=org_id, readonly=True) as cur:
+        cur.execute(
+            "SELECT id FROM core.events WHERE org_id = %s "
+            "AND delivery_state IN ('pending', 'failed') "
+            "AND occurred_at < now() - (%s || ' seconds')::interval "
+            "ORDER BY seq LIMIT %s",
+            (org_id, grace_seconds, limit),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def redeliver(org_id: str, event_id: str) -> None:
+    """Re-invokes the existing in-process dispatch path
+    (`publish_committed`, reusing its own `MAX_DEPTH` guard -- not a
+    second dispatch mechanism) for one stored event row, reconstructed
+    from its persisted `before_snapshot`/`after_snapshot` (never the
+    in-memory `RecordEvent` -- that's long gone by the time M7's worker
+    picks this up).
+
+    On success, marks the row `delivered` so the next sweep doesn't pick
+    it up again. If a subscriber throws during this redelivery,
+    `publish_committed`'s own `_mark_failed` has already re-marked the
+    row `failed` by the time this returns -- `mark_delivered`'s
+    conditional `WHERE delivery_state = 'pending'` then correctly no-ops
+    rather than overwriting that failure back to `delivered`.
+    """
+    from server.db import pool
+
+    with pool.transaction(org_id=org_id, readonly=True) as cur:
+        cur.execute(
+            "SELECT * FROM core.events WHERE org_id = %s AND id = %s", (org_id, event_id)
+        )
+        row = cur.fetchone()
+    if row is None:
+        return  # purged since the sweep enqueued this -- nothing to redeliver
+
+    event = RecordEvent(
+        org_id=org_id,
+        entity=row["entity"],
+        record_id=str(row["record_id"]) if row["record_id"] else None,
+        action=row["action"],
+        actor_user_id=str(row["actor_user_id"]) if row["actor_user_id"] else "",
+        actor_kind=row["actor_kind"],
+        diff=row["diff"] or {},
+        before=row["before_snapshot"] or {},
+        after=row["after_snapshot"] or {},
+        event_id=event_id,
+    )
+    publish_committed(event)
+    mark_delivered(event_id, org_id)

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Optional
 
 if TYPE_CHECKING:
@@ -95,6 +96,15 @@ class FieldSpec:
     # WHERE clause -- unlike write_level's entity-wide check, this depends
     # on which specific row was fetched.
     read_level: Optional[str] = None
+    # A pure function of (the fetched row, the entity's context -- see
+    # EntitySpec.context_builder) -> the value to inject under this
+    # field's name. No `column`/`custom_key`, and never `writable` (a
+    # computed field has nothing to write to). M7's deal-rotting flag is
+    # the first user: it's derived from `last_activity_at` and a per-org
+    # threshold, not a stored/recomputed column (server/core/registry.py's
+    # `deal` entity block is the only place that knows what "rotting"
+    # means -- this field itself is domain-neutral plumbing, R6-clean).
+    compute: Optional[Callable[[dict[str, Any], dict[str, Any]], Any]] = None
 
     @property
     def is_custom(self) -> bool:
@@ -113,6 +123,13 @@ class EntitySpec:
     supports_custom_fields: bool = True
     admin_only: bool = False
     module: str = "core"
+    # Built ONCE per list()/get() call (never per row) and handed to
+    # every field's `compute()` -- so a computed field that needs
+    # something beyond the row itself (M7's rotting flag needs a
+    # per-org settings lookup) does that lookup a single time, not once
+    # per returned record. None for every entity with no computed
+    # fields, which is most of them.
+    context_builder: Optional[Callable[["Principal"], dict[str, Any]]] = None
 
     def field(self, name: str) -> FieldSpec:
         spec = self.fields.get(name)
@@ -460,6 +477,53 @@ def _spine(extra: dict[str, FieldSpec]) -> dict[str, FieldSpec]:
     return base
 
 
+# ── M7 deal rotting -- a computed field, no job, no stored column ───────────
+# "Rotting is a pure function of now() - last_activity_at against a
+# configurable threshold, computed at read time... simpler and correct:
+# don't build a mechanism when a formula already suffices." The formula
+# itself lives here, next to the rest of `deal`'s own field declarations
+# -- FieldSpec.compute/EntitySpec.context_builder (registry.py/repository.py)
+# are domain-neutral plumbing that knows nothing about deals; this is the
+# one place that does.
+
+_DEFAULT_ROTTING_THRESHOLD_DAYS = 14
+
+
+def _deal_rotting_context(principal: "Principal") -> dict[str, Any]:
+    # Local import: registry.py stays a foundational module with no
+    # runtime dependency on peer core modules (see the module docstring)
+    # -- deferred to call time, exactly like server/providers/calendar.py's
+    # per-branch lazy imports.
+    from server.core import settings as core_settings
+
+    pipeline = core_settings.get_settings(principal.org_id, "pipeline")
+    return {
+        "rotting_threshold_days": pipeline.get(
+            "rotting_threshold_days", _DEFAULT_ROTTING_THRESHOLD_DAYS
+        ),
+    }
+
+
+def _deal_rotting(record: dict[str, Any], context: dict[str, Any]) -> bool:
+    """True when this deal is still open and its last recorded activity
+    (server/core/deal_activity.py keeps `last_activity_at` current) is
+    older than the org's configured threshold. A deal with no recorded
+    activity at all, or one that's already closed (won/lost), is never
+    "rotting" -- fails safe to `False` rather than flagging every deal
+    a fresh install has never touched (safety rule 8's same
+    null-never-auto-matches shape, applied to a derived flag instead of
+    a category)."""
+    if record.get("status") != "open":
+        return False
+    last_activity = record.get("last_activity_at")
+    if last_activity is None:
+        return False
+    if isinstance(last_activity, str):
+        last_activity = datetime.fromisoformat(last_activity)
+    threshold_days = context.get("rotting_threshold_days", _DEFAULT_ROTTING_THRESHOLD_DAYS)
+    return datetime.now(timezone.utc) - last_activity > timedelta(days=threshold_days)
+
+
 def register_core_entities() -> None:
     """Declare the domain-neutral core. Idempotent."""
     register(EntitySpec(
@@ -516,6 +580,7 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="deal", table="core.deals", label="Deals",
         label_field="name", searchable=("name",),
+        context_builder=_deal_rotting_context,
         fields=_spine({
             "name": FieldSpec("name", "text", column="name", required=True),
             "pipeline_id": FieldSpec("pipeline_id", "uuid", column="pipeline_id"),
@@ -528,6 +593,8 @@ def register_core_entities() -> None:
                                 options=("open", "won", "lost")),
             "last_activity_at": FieldSpec("last_activity_at", "datetime",
                                           column="last_activity_at", writable=False),
+            "rotting": FieldSpec("rotting", "boolean", filterable=False, sortable=False,
+                                 writable=False, compute=_deal_rotting),
         }),
     ))
 

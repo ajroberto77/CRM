@@ -6,8 +6,9 @@ settings that are distinct from environment-only infrastructure config:
 Postgres, per org, and are hot-reloaded. They are NOT here -- see
 server/core/settings.py."
 
-`section` is a small closed vocabulary (`"llm"`, `"approval"`) rather than one row
-per individual key -- a whole related group reads and writes together,
+`section` is a small closed vocabulary (`"llm"`, `"approval"`, `"pipeline"`)
+rather than one row per individual key -- a whole related group reads and
+writes together,
 which is what makes `update_settings()`'s read-merge-write discipline work:
 there is exactly one row to lock, merge into, and write back per section,
 never a scatter of independent single-key writes that could race or
@@ -41,7 +42,7 @@ from server.db import pool
 
 # The closed set of settings sections. Adding one is a one-line change here;
 # nothing else needs to know the list grew.
-SECTIONS = ("llm", "approval")
+SECTIONS = ("llm", "approval", "pipeline")
 
 
 class UnknownSection(ValueError):

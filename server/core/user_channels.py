@@ -104,3 +104,34 @@ def resolve_user(org_id: str, kind: str, raw_value: str) -> Optional[str]:
         )
         row = cur.fetchone()
         return str(row["user_id"]) if row else None
+
+
+def resolve_user_any_org(kind: str, raw_value: str) -> Optional[tuple[str, str]]:
+    """Same reverse lookup as `resolve_user()`, for a caller that has no
+    org context yet -- `dispatch.receive_commands()`'s Signal/Telegram
+    polls are deployment-wide (one bot number/token, not one per org, per
+    `telegram.py`'s own docstring), so the inbound sender has to be
+    checked against every org's channels, not one already-chosen org's.
+
+    `core.user_channels` is RLS-scoped like every core table (`FORCE ROW
+    LEVEL SECURITY`), so a query with no tenant GUC set sees zero rows
+    regardless of what's actually stored -- there is no single query that
+    searches it across orgs. This tries each org in turn
+    (`jobs.all_org_ids()`, the same cross-org discovery `sync_poller.py`
+    and `message_poller.py` already use), returning the first match.
+    Org counts on one self-hosted deployment are small enough that this is
+    a real cost, never a correctness concern, and a value that happens to
+    be linked in two different orgs (each org's own `user_channels` row is
+    independently unique) resolves to whichever org's `all_org_ids()`
+    happens to return first -- the same "first linked wins" shape
+    `dispatch.send()` already accepts for a user with two linked channels.
+
+    Returns `(org_id, user_id)`, or `None` if no org recognizes this
+    sender at all."""
+    from server import jobs  # local import: avoids a load-order cycle with server.jobs
+
+    for org_id in jobs.all_org_ids():
+        user_id = resolve_user(org_id, kind, raw_value)
+        if user_id is not None:
+            return org_id, user_id
+    return None
