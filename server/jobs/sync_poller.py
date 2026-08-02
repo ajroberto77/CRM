@@ -20,17 +20,12 @@ from __future__ import annotations
 import time
 from typing import Any, Optional
 
+from server import jobs
 from server.core import accounts, derivation, permissions, repository
 from server.db import pool
 from server.providers import contacts as contacts_dispatch
 
 _DEFAULT_INTERVAL_SECONDS = 300
-
-
-def _org_ids() -> list[str]:
-    with pool.system_transaction() as cur:
-        cur.execute("SELECT id FROM core.orgs")
-        return [str(row["id"]) for row in cur.fetchall()]
 
 
 def _primary_channel(contact: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
@@ -121,7 +116,7 @@ def sync_account(account: dict[str, Any]) -> bool:
 
 
 def poll_once() -> None:
-    for org_id in _org_ids():
+    for org_id in jobs.all_org_ids():
         for account in accounts.list_accounts(org_id):
             if account["status"] not in ("active", "error"):
                 continue  # 'pending' (link never completed) / 'disabled' -- skip

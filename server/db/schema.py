@@ -742,6 +742,30 @@ TABLES: dict[str, dict[str, str]] = {
         "updated_at": _CREATED,
     },
 
+    # M6's messaging axis (server/channels/dispatch.py): resolves an
+    # inbound Signal/Telegram sender to a CRM user. Distinct from
+    # contact_channels, which maps a channel to a third party's `person`
+    # -- this maps a channel to a LOGIN. Deliberately NOT a registered
+    # entity, same reasoning as core.connected_accounts: this is
+    # identity/auth-adjacent, not generic CRM data a broad edit scope
+    # should be able to reassign. server/core/user_channels.py is the one
+    # place that writes it, and server/api/channels.py never accepts a
+    # target user_id from the request body -- every link is the calling
+    # principal linking themselves.
+    "core.user_channels": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "user_id": "uuid NOT NULL REFERENCES core.users(id) ON DELETE CASCADE",
+        "kind": (
+            "text NOT NULL DEFAULT '' "
+            "CHECK (kind IN ('email','phone','signal','telegram','handle'))"
+        ),
+        "value_normalized": "text NOT NULL DEFAULT ''",
+        "value_raw": "text NOT NULL DEFAULT ''",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
 }
 
 # ── Indexes ──────────────────────────────────────────────────────────────────
@@ -933,6 +957,11 @@ INDEXES: tuple[str, ...] = (
     "ON core.proposed_changes (org_id, subject_type, subject_id)",
     "CREATE INDEX IF NOT EXISTS ix_proposed_changes_org_status "
     "ON core.proposed_changes (org_id, status)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_user_channels_org_kind_value "
+    "ON core.user_channels (org_id, kind, value_normalized)",
+    "CREATE INDEX IF NOT EXISTS ix_user_channels_org_user "
+    "ON core.user_channels (org_id, user_id)",
 
 )
 

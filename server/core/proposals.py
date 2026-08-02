@@ -62,6 +62,25 @@ def set_notification_message_id(org_id: str, proposal_id: str, message_id: str) 
     )
 
 
+def find_by_notification_message_id(org_id: str, message_id: str) -> Optional[dict[str, Any]]:
+    """The reverse lookup a channel command's swipe-quote needs (M6's
+    `server/channels/commands.py`): the opaque message id a notification
+    was sent as -> the proposal it's about, or `None` if it doesn't
+    resolve to anything. A quote that doesn't resolve is deliberately
+    the caller's problem to treat as "not a command" rather than falling
+    back to guessing -- this function only ever returns an exact match or
+    nothing."""
+    principal = permissions.system_principal(org_id, "resolve proposal by notification id")
+    listing = repository.list_records(
+        principal, "proposed_change",
+        filters={"field": "notification_message_id", "op": "eq", "value": message_id},
+        limit=1,
+    )
+    if listing["total"] == 0:
+        return None
+    return listing["records"][0]
+
+
 def _set_decision(
     org_id: str, proposal_id: str, status: str, decided_by: str, *, from_status: str = "pending"
 ) -> dict[str, Any]:

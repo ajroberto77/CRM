@@ -631,6 +631,25 @@ button:disabled {
   align-items: center;
 }
 
+/* LlmSettingsPage's select+input row and ollama-test input+button row had
+   room to spare (760px-wide page). ConnectedChannelsPage (M6) puts the same
+   select+input pairing inside a .crm-settings-provider-card, which can be as
+   narrow as its 280px grid-track minimum -- there the two controls' default
+   preferred widths together exceed the available space, leaving the browser
+   to split the shrink between them by its own proportional default. Give the
+   text input the leftover space explicitly and let it be the one that
+   shrinks, so the fit is deterministic instead of an incidental squeeze; the
+   select/button stay at their natural (small) content width. */
+.crm-settings-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.crm-settings-row select,
+.crm-settings-row button {
+  flex-shrink: 0;
+}
+
 .crm-settings-provider-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

@@ -20,8 +20,11 @@ R6 doesn't apply. Wired in from `server/core/modules.py` alongside
    AND `trust.trust_reason()` both match) -- additive, never subtractive:
    it can accept something the mode would otherwise leave pending, but
    can never hold back something the mode already approved.
-4. Nothing above fires -> the proposal stays `pending` for a human (or,
-   once M6 lands, a channel notification) to decide.
+4. Nothing above fires -> the proposal stays `pending`, and M6's
+   messaging axis sends the interaction owner a channel notification
+   (best-effort: messaging disabled, or no linked channel, both just mean
+   no notification went out -- the proposal is still there, and still
+   decidable, in the generic Pending Proposals UI either way).
 
 A proposal only ever executes a real calendar write against the
 INTERACTION OWNER's own linked account -- this platform has no
@@ -43,6 +46,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from server import config
+from server.channels import dispatch as channels_dispatch
 from server.core import accounts, events, proposals, settings, trust
 from server.extraction import scheduling
 from server.providers import calendar as calendar_dispatch
@@ -75,6 +79,32 @@ def _execute_calendar_write(org_id: str, account: dict[str, Any], event: dict[st
         calendar_dispatch.update_event(org_id, account, target["id"], **kwargs)
     else:
         calendar_dispatch.create_event(org_id, account, **kwargs)
+
+
+def _format_notification(event: dict[str, Any]) -> str:
+    when = event.get("date") or ""
+    if event.get("time"):
+        when += f" at {event['time']}"
+    title = event.get("title") or "(untitled)"
+    return (
+        f"📅 New scheduling proposal: \"{title}\" on {when}. "
+        "Reply YES to add it to your calendar, or NO to skip."
+    )
+
+
+def _notify_pending(org_id: str, owner_user_id: str, proposal: dict[str, Any]) -> None:
+    """Best-effort: `channels_dispatch.send()` raising (messaging
+    disabled, or the owner has no linked channel) just means no
+    notification went out -- the proposal is still `pending` and still
+    decidable through the generic Pending Proposals UI either way, so
+    this is never allowed to fail the interaction write that triggered
+    it."""
+    text = _format_notification(proposal["payload"])
+    try:
+        message_id = channels_dispatch.send(org_id, owner_user_id, text)
+    except channels_dispatch.ChannelError:
+        return
+    proposals.set_notification_message_id(org_id, str(proposal["id"]), message_id)
 
 
 def _auto_accept_reason(
@@ -120,8 +150,10 @@ def _route_proposal(
         _accept(reason)
         return
 
-    # Stays 'pending' -- a human decides via the generic UI (a channel
-    # notification is M6 scope, not yet built).
+    # Stays 'pending' -- notify the owner on their linked channel, if
+    # any, so they can decide with a swipe-reply; the generic Pending
+    # Proposals UI is always available regardless.
+    _notify_pending(org_id, owner_user_id, proposal)
 
 
 def _on_interaction_created(event: events.RecordEvent) -> None:

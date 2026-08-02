@@ -209,6 +209,19 @@ class TestSyncAccount:
 
 
 class TestPollOnce:
+    def test_an_active_accounts_org_is_actually_discovered_and_synced(self, org_id, account):
+        """Regression coverage for a real bug found while porting this
+        poller's shared `all_org_ids()` helper for M6: querying
+        `core.orgs` with no tenant context returns zero rows under RLS,
+        always (`server/jobs/__init__.py`'s docstring explains why) --
+        `test_pending_and_disabled_accounts_are_skipped` below could not
+        have caught that, since "sync_account not called" is equally true
+        whether the org was found and correctly skipped, or never
+        discovered at all."""
+        with mock.patch.object(sync_poller, "sync_account", return_value=True) as fake_sync:
+            sync_poller.poll_once()
+        fake_sync.assert_called_once_with(account)
+
     def test_pending_and_disabled_accounts_are_skipped(self, org_id):
         admin = users.create_user(
             org_id, email="pollonce@example.com", name="A",

@@ -20,6 +20,7 @@ export default defineConfig({
       '/health': API_TARGET,
       '/settings': API_TARGET,
       '/accounts': API_TARGET,
+      '/channels': API_TARGET,
       '/proposals': API_TARGET,
     },
   },

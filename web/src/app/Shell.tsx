@@ -30,6 +30,12 @@ export function Shell() {
             Connected Accounts
           </NavLink>
           <NavLink
+            to="/admin/connected-channels"
+            className={({ isActive }) => (isActive ? 'crm-sidebar-link crm-sidebar-link-active' : 'crm-sidebar-link')}
+          >
+            Connected Channels
+          </NavLink>
+          <NavLink
             to="/review/proposals"
             className={({ isActive }) => (isActive ? 'crm-sidebar-link crm-sidebar-link-active' : 'crm-sidebar-link')}
           >

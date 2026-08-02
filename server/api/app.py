@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from server import config
 from server.api import accounts as accounts_api
 from server.api import auth, records
+from server.api import channels as channels_api
 from server.api import proposals as proposals_api
 from server.api import settings as settings_api
 from server.core import account_link, associations, modules, passwords, permissions, query, registry, repository, sessions, users
@@ -72,6 +73,7 @@ app.include_router(records.router)
 app.include_router(records.association_router)
 app.include_router(settings_api.router)
 app.include_router(accounts_api.router)
+app.include_router(channels_api.router)
 app.include_router(proposals_api.router)
 
 
