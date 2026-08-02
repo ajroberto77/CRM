@@ -273,6 +273,12 @@ TABLES: dict[str, dict[str, str]] = {
             "CHECK (source IN ('human','derived','import','sync','ai'))"
         ),
         "is_derived": "boolean NOT NULL DEFAULT false",
+        # M5's trust primitive (server/core/trust.py): a specific person
+        # whose scheduling proposals auto-accept regardless of the org-wide
+        # trusted_senders patterns below. Default false -- trust is opt-in,
+        # never inferred (safety rule 9: destructive/consequential paths
+        # default off).
+        "auto_accept": "boolean NOT NULL DEFAULT false",
         "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
         "created_at": _CREATED,
         "updated_at": _CREATED,
@@ -692,6 +698,50 @@ TABLES: dict[str, dict[str, str]] = {
         "created_at": _CREATED,
     },
 
+    # M5's trust primitive (server/core/trust.py), ported from Cal's
+    # trusted_senders.py. `pattern` is either a full email address or an
+    # "@domain" -- normalize-at-write (server/core/trust.py's add_sender()),
+    # never re-normalized at read time.
+    "core.trusted_senders": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "pattern": "text NOT NULL DEFAULT ''",
+        "label": "text NOT NULL DEFAULT ''",
+        "note": "text NOT NULL DEFAULT ''",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
+    # server/core/proposals.py's "one approval queue." Polymorphic over
+    # subject_type/subject_id -- calendar_event (M5) today, extensible.
+    # `category` is deliberately open text, not CHECK-constrained: the
+    # closed vocabulary belongs to whichever producer creates a proposal
+    # (server/extraction/scheduling.py's EVENT_CATEGORIES today), not to
+    # this domain-neutral queue.
+    "core.proposed_changes": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "subject_type": "text NOT NULL DEFAULT ''",
+        "subject_id": "uuid",
+        "kind": "text NOT NULL DEFAULT ''",
+        "payload": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "confidence": "numeric(4,3)",
+        "category": "text NOT NULL DEFAULT ''",
+        "status": (
+            "text NOT NULL DEFAULT 'pending' "
+            "CHECK (status IN ('pending','approved','declined','auto_approved'))"
+        ),
+        "decided_by": "text NOT NULL DEFAULT ''",
+        "decided_at": "timestamptz",
+        "notification_message_id": "text NOT NULL DEFAULT ''",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": _CREATED,
+        "updated_at": _CREATED,
+    },
+
 }
 
 # ── Indexes ──────────────────────────────────────────────────────────────────
@@ -875,6 +925,14 @@ INDEXES: tuple[str, ...] = (
     "ON core.sync_links (org_id, account_id, provider_object_id)",
     "CREATE INDEX IF NOT EXISTS ix_sync_links_org_entity "
     "ON core.sync_links (org_id, entity_type, entity_id)",
+
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_trusted_senders_org_pattern "
+    "ON core.trusted_senders (org_id, pattern)",
+
+    "CREATE INDEX IF NOT EXISTS ix_proposed_changes_org_subject "
+    "ON core.proposed_changes (org_id, subject_type, subject_id)",
+    "CREATE INDEX IF NOT EXISTS ix_proposed_changes_org_status "
+    "ON core.proposed_changes (org_id, status)",
 
 )
 

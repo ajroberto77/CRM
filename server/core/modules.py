@@ -11,7 +11,7 @@ from __future__ import annotations
 import importlib
 
 from server import config
-from server.core import derivation, registry
+from server.core import derivation, registry, scheduling_pipeline
 
 
 def install_enabled_modules() -> None:
@@ -22,6 +22,9 @@ def install_enabled_modules() -> None:
     # Core behavior for core columns (person/organization.is_derived) -- not
     # a module, so it wires in here rather than through a modules/*/install().
     derivation.install()
+    # M5: interaction -> scheduling extraction -> approval queue -> calendar
+    # write. Also core, same reasoning.
+    scheduling_pipeline.install()
     for name in config.get_enabled_modules():
         module = importlib.import_module(f"modules.{name}")
         module.install()

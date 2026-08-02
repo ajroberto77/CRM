@@ -489,6 +489,7 @@ def register_core_entities() -> None:
                                 options=("human", "derived", "import", "sync", "ai")),
             "is_derived": FieldSpec("is_derived", "boolean", column="is_derived",
                                     writable=False),
+            "auto_accept": FieldSpec("auto_accept", "boolean", column="auto_accept"),
         }),
     ))
 
@@ -499,6 +500,16 @@ def register_core_entities() -> None:
             "name": FieldSpec("name", "text", column="name", required=True),
             "stages": FieldSpec("stages", "jsonb", column="stages", filterable=False,
                                 sortable=False),
+        }),
+    ))
+
+    register(EntitySpec(
+        name="trusted_sender", table="core.trusted_senders", label="Trusted Senders",
+        label_field="pattern", admin_only=True, supports_custom_fields=False,
+        fields=_spine({
+            "pattern": FieldSpec("pattern", "text", column="pattern", required=True),
+            "label": FieldSpec("label", "text", column="label"),
+            "note": FieldSpec("note", "text", column="note"),
         }),
     ))
 
@@ -651,6 +662,45 @@ def register_core_entities() -> None:
                                 options=("human", "sync", "ai")),
             "confidence": FieldSpec("confidence", "number", column="confidence"),
             "document_id": FieldSpec("document_id", "uuid", column="document_id"),
+        }),
+    ))
+
+    # server/core/proposals.py's "one approval queue." Every field is
+    # writable=False through the generic REST/repository path -- the
+    # generic UI browses proposals for free (R4), but a real decision only
+    # ever happens through proposals.approve()/decline()/auto_approve(),
+    # safety rule 3's single execution choke point.
+    register(EntitySpec(
+        name="proposed_change", table="core.proposed_changes", label="Proposals",
+        label_field="kind", supports_custom_fields=False,
+        default_sort=(("created_at", "desc"),),
+        fields=_spine({
+            # _spine()'s default owner_id is writable at "team" level, but
+            # every field here must be writable=False (server/api/proposals.py's
+            # own docstring says so) -- proposals.py's CAS functions are the
+            # only mutation path, and create() is the only place owner_id
+            # is ever set.
+            "owner_id": FieldSpec("owner_id", "uuid", column="owner_id", writable=False),
+            "subject_type": FieldSpec("subject_type", "text", column="subject_type",
+                                      writable=False),
+            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
+                                    writable=False),
+            "kind": FieldSpec("kind", "text", column="kind", writable=False),
+            "payload": FieldSpec("payload", "jsonb", column="payload",
+                                 filterable=False, sortable=False, writable=False),
+            "confidence": FieldSpec("confidence", "number", column="confidence",
+                                    writable=False),
+            "category": FieldSpec("category", "text", column="category", writable=False),
+            "status": FieldSpec("status", "select", column="status", writable=False,
+                                options=("pending", "approved", "declined", "auto_approved")),
+            "decided_by": FieldSpec("decided_by", "text", column="decided_by",
+                                    writable=False),
+            "decided_at": FieldSpec("decided_at", "datetime", column="decided_at",
+                                    writable=False),
+            "notification_message_id": FieldSpec(
+                "notification_message_id", "text", column="notification_message_id",
+                writable=False,
+            ),
         }),
     ))
 

@@ -7,6 +7,7 @@ import { EntityListPage } from '../records/EntityListPage'
 import { useEntityList } from '../records/useEntitySchema'
 import { LlmSettingsPage } from '../settings/LlmSettingsPage'
 import { ConnectedAccountsPage } from '../settings/ConnectedAccountsPage'
+import { PendingProposalsPage } from '../proposals/PendingProposalsPage'
 
 export function App() {
   const { status, firstRunRequired } = useAuth()
@@ -30,6 +31,9 @@ export function App() {
             GET /settings/llm on the server instead of the SPA shell. */}
         <Route path="admin/llm-settings" element={<LlmSettingsPage />} />
         <Route path="admin/connected-accounts" element={<ConnectedAccountsPage />} />
+        {/* Not "/proposals/*" -- same reload/proxy-collision reasoning as
+            above; that prefix is proxied straight to the backend API. */}
+        <Route path="review/proposals" element={<PendingProposalsPage />} />
         <Route path="*" element={<HomeRedirect />} />
       </Route>
     </Routes>

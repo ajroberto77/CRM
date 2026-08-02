@@ -645,6 +645,16 @@ button:disabled {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
+  /* This card is a flex item inside .crm-settings-provider-grid (a CSS
+     grid), so it defaults to min-width:auto and refuses to shrink below its
+     content's width. LlmSettingsPage never triggered this because its cards
+     only ever hold short controlled labels, but PendingProposalsPage puts
+     unconstrained extracted text here (event titles, meeting-link
+     locations) that can be one long unbroken token -- min-width:0 lets the
+     card shrink to the grid track, overflow-wrap keeps a spaceless string
+     from pushing past it. */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .crm-settings-provider-header {

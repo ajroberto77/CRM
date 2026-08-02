@@ -29,6 +29,12 @@ export function Shell() {
           >
             Connected Accounts
           </NavLink>
+          <NavLink
+            to="/review/proposals"
+            className={({ isActive }) => (isActive ? 'crm-sidebar-link crm-sidebar-link-active' : 'crm-sidebar-link')}
+          >
+            Pending Proposals
+          </NavLink>
           {user?.is_admin && (
             <NavLink
               to="/admin/llm-settings"
