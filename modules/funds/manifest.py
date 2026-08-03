@@ -27,6 +27,7 @@ as a co-investor, and accumulates its own interactions, at no extra cost.
 """
 from __future__ import annotations
 
+from server.core import identity
 from server.core.registry import (
     AssociationRole,
     EntitySpec,
@@ -36,6 +37,14 @@ from server.core.registry import (
 )
 
 MODULE = "funds"
+
+# investment_accounts.account_type -- closed vocabulary, same anti-drift
+# discipline as investor_portal's ASSET_CLASSES/STAGES.
+ACCOUNT_TYPES = (
+    "individual", "joint", "trust", "llc", "lp", "corporation", "ira", "daf",
+    "foundation", "endowment", "spv", "other",
+)
+ACCOUNT_STATUSES = ("prospect", "onboarding", "active", "restricted", "closed")
 
 # Module-owned tables, merged into the schema by db/schema.py's ordinary
 # migration path. Declared here rather than in core so the vertical is
@@ -84,6 +93,45 @@ TABLES: dict[str, dict[str, str]] = {
         "created_at": "timestamptz NOT NULL DEFAULT now()",
         "updated_at": "timestamptz NOT NULL DEFAULT now()",
     },
+    # The investment vehicle layer: the actual thing that commits capital --
+    # a trust, an LLC, an IRA, a personal account, an SPV. `entity_org_id`
+    # mirrors `funds.entity_org_id` (the account's own legal entity, when it
+    # has one); `person_id` is the direct-personal-account case. Both
+    # nullable, and normally exactly one is set -- same shape as
+    # `commitments.investor_org_id`/`investor_person_id`, which today is
+    # equally unenforced (no CHECK, no validator on either), not a stronger
+    # precedent this table is falling short of. Not a CHECK here either,
+    # since "exactly one of two nullable
+    # FKs" is the same shape already accepted there without one.
+    "core.investment_accounts": {
+        "id": "uuid PRIMARY KEY DEFAULT gen_random_uuid()",
+        "org_id": "uuid NOT NULL REFERENCES core.orgs(id) ON DELETE CASCADE",
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "name": "text NOT NULL DEFAULT ''",
+        "entity_org_id": "uuid REFERENCES core.organizations(id) ON DELETE SET NULL",
+        "person_id": "uuid REFERENCES core.persons(id) ON DELETE SET NULL",
+        "account_type": (
+            "text NOT NULL DEFAULT 'other' CHECK (account_type IN ("
+            "'individual','joint','trust','llc','lp','corporation','ira',"
+            "'daf','foundation','endowment','spv','other'))"
+        ),
+        # ISO-3166-1 alpha-2 (server/core/identity.py's normalize_country),
+        # same representation and same validate-and-uppercase-on-write
+        # behavior as Phase A's organization/person country columns --
+        # via this entity's own FieldSpec.normalize below, the generic
+        # mechanism repository.py's write path applies to any field that
+        # declares one, so this module never has to teach core the name
+        # `investment_account` (R6) to get the same canonicalization.
+        "domicile_country": "text NOT NULL DEFAULT ''",
+        "base_currency": "text NOT NULL DEFAULT 'USD'",
+        "status": (
+            "text NOT NULL DEFAULT 'prospect' CHECK (status IN ("
+            "'prospect','onboarding','active','restricted','closed'))"
+        ),
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": "timestamptz NOT NULL DEFAULT now()",
+        "updated_at": "timestamptz NOT NULL DEFAULT now()",
+    },
 }
 
 INDEXES: tuple[str, ...] = (
@@ -105,6 +153,16 @@ INDEXES: tuple[str, ...] = (
     "ON core.funds USING gin (custom jsonb_path_ops)",
     "CREATE INDEX IF NOT EXISTS ix_commitments_custom_gin "
     "ON core.commitments USING gin (custom jsonb_path_ops)",
+    "CREATE INDEX IF NOT EXISTS ix_investment_accounts_org_updated "
+    "ON core.investment_accounts (org_id, updated_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_investment_accounts_org_owner "
+    "ON core.investment_accounts (org_id, owner_id)",
+    "CREATE INDEX IF NOT EXISTS ix_investment_accounts_org_entity "
+    "ON core.investment_accounts (org_id, entity_org_id)",
+    "CREATE INDEX IF NOT EXISTS ix_investment_accounts_org_person "
+    "ON core.investment_accounts (org_id, person_id)",
+    "CREATE INDEX IF NOT EXISTS ix_investment_accounts_custom_gin "
+    "ON core.investment_accounts USING gin (custom jsonb_path_ops)",
 )
 
 
@@ -160,6 +218,25 @@ def install() -> None:
         }),
     ))
 
+    register(EntitySpec(
+        name="investment_account", table="core.investment_accounts",
+        label="Investment accounts", module=MODULE,
+        label_field="name", searchable=("name",),
+        fields=_spine({
+            "name": FieldSpec("name", "text", column="name", required=True),
+            "entity_org_id": FieldSpec("entity_org_id", "uuid", column="entity_org_id"),
+            "person_id": FieldSpec("person_id", "uuid", column="person_id"),
+            "account_type": FieldSpec("account_type", "select", column="account_type",
+                                      options=ACCOUNT_TYPES),
+            "domicile_country": FieldSpec("domicile_country", "text",
+                                          column="domicile_country",
+                                          normalize=identity.normalize_country),
+            "base_currency": FieldSpec("base_currency", "text", column="base_currency"),
+            "status": FieldSpec("status", "select", column="status",
+                                options=ACCOUNT_STATUSES),
+        }),
+    ))
+
     # The vertical's relationship vocabulary. Core knows none of these words.
     register_role(AssociationRole(
         "lp_in", ("organization", "person"), ("fund",),
@@ -181,3 +258,15 @@ def install() -> None:
     register_role(AssociationRole(
         "acquirer_of", ("organization",), ("organization",),
         inverse_label="acquired by", module=MODULE))
+    # The investment-relationship rollup -- deliberately NOT legal-entity-
+    # based, unlike core's `owned_by` (Goldman's advisory and investment-
+    # advisory arms are separate legal entities but can roll up under one
+    # Investment GP relationship that ignores that structure entirely).
+    # `from` covers both an org-level GP nesting under a bigger GP AND the
+    # leaf edge from an investment_account up to its GP, in one traversable
+    # dimension -- same child-to-parent convention as `owned_by`, same
+    # traversal mechanism (server/core/hierarchy.py), different real-world
+    # concept.
+    register_role(AssociationRole(
+        "rolls_up_to", ("organization", "investment_account"), ("organization",),
+        inverse_label="rolls up from", hierarchical=True, module=MODULE))

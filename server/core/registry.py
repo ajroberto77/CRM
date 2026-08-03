@@ -105,6 +105,17 @@ class FieldSpec:
     # `deal` entity block is the only place that knows what "rotting"
     # means -- this field itself is domain-neutral plumbing, R6-clean).
     compute: Optional[Callable[[dict[str, Any], dict[str, Any]], Any]] = None
+    # A pure function of the submitted value -> its canonical form, or None
+    # if the value is not valid for this field. Applied by repository.py's
+    # write path to every present, truthy field that declares one, BEFORE
+    # the row is written -- the generic version of what `_derive_normalized`
+    # used to hardcode per core entity name. This is what lets a module
+    # declare `normalize=identity.normalize_country` on its own field and
+    # get exactly the same validate-and-canonicalize behavior organizations/
+    # persons get, without repository.py (core) ever learning the module's
+    # entity name (R6) or a validator -- which can only reject, never
+    # rewrite a column -- standing in as a worse substitute (R1).
+    normalize: Optional[Callable[[Any], Optional[Any]]] = None
 
     @property
     def is_custom(self) -> bool:
@@ -533,6 +544,11 @@ def _deal_rotting(record: dict[str, Any], context: dict[str, Any]) -> bool:
 
 def register_core_entities() -> None:
     """Declare the domain-neutral core. Idempotent."""
+    # Local import: registry.py stays a foundational module with no runtime
+    # dependency on peer core modules (see the module docstring) -- deferred
+    # to call time, matching every other cross-module import in this file.
+    from server.core import identity
+
     register(EntitySpec(
         name="organization", table="core.organizations", label="Companies",
         label_field="name", searchable=("name", "domain"),
@@ -546,7 +562,8 @@ def register_core_entities() -> None:
             "is_derived": FieldSpec("is_derived", "boolean", column="is_derived",
                                     writable=False),
             "domicile_country": FieldSpec("domicile_country", "text",
-                                          column="domicile_country"),
+                                          column="domicile_country",
+                                          normalize=identity.normalize_country),
         }),
     ))
 
@@ -556,7 +573,8 @@ def register_core_entities() -> None:
         fields=_spine({
             "full_name": FieldSpec("full_name", "text", column="full_name", required=True),
             "title": FieldSpec("title", "text", column="title"),
-            "primary_email": FieldSpec("primary_email", "email", column="primary_email"),
+            "primary_email": FieldSpec("primary_email", "email", column="primary_email",
+                                       normalize=identity.normalize_email),
             "description": FieldSpec("description", "text", column="description"),
             "source": FieldSpec("source", "select", column="source", writable=False,
                                 options=("human", "derived", "import", "sync", "ai")),
@@ -564,8 +582,10 @@ def register_core_entities() -> None:
                                     writable=False),
             "auto_accept": FieldSpec("auto_accept", "boolean", column="auto_accept"),
             "tax_residence_country": FieldSpec("tax_residence_country", "text",
-                                               column="tax_residence_country"),
+                                               column="tax_residence_country",
+                                               normalize=identity.normalize_country),
             "citizenship_country": FieldSpec("citizenship_country", "text",
+                                             normalize=identity.normalize_country,
                                              column="citizenship_country"),
         }),
     ))

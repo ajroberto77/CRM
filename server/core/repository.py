@@ -446,6 +446,7 @@ def create(
         columns.setdefault(
             "owner_id", None if principal.is_system else principal.user_id
         )
+        _apply_field_normalizers(entity, columns)
         _derive_normalized(entity, columns)
 
         names = ["id", "org_id", "custom"] + list(columns)
@@ -503,6 +504,7 @@ def update(
     with pool.transaction(org_id=principal.org_id, user_id=principal.user_id) as cur:
         custom_defs = _custom_fields(cur, entity)
         columns, custom = _split_changes(entity, changes, custom_defs, principal)
+        _apply_field_normalizers(entity, columns)
         _derive_normalized(entity, columns)
 
         cur.execute(
@@ -633,40 +635,40 @@ def _run_validators(
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _derive_normalized(entity: str, columns: dict[str, Any]) -> None:
-    """Maintain the normalized shadow columns used for matching. Uses
-    core/identity.py rather than inlining a .lower().strip() (R5)."""
+    """Maintain the normalized shadow columns used for matching -- an
+    ADDITIONAL column derived from another, not a transform of the
+    submitted value itself, which is why this stays hardcoded per core
+    entity name rather than going through `_apply_field_normalizers` below
+    (there is no `FieldSpec` for "the normalized-name shadow column" to hang
+    a `normalize=` callable off of). Uses core/identity.py rather than
+    inlining a .lower().strip() (R5)."""
     from server.core import identity
 
-    if entity == "organization":
-        if "name" in columns:
-            columns["name_normalized"] = identity.normalize_name(columns["name"]) or ""
-        _normalize_country_column(columns, "domicile_country")
-    if entity == "person":
-        if "full_name" in columns:
-            columns["name_normalized"] = identity.normalize_name(columns["full_name"]) or ""
-        if "primary_email" in columns and columns["primary_email"]:
-            normalized = identity.normalize_email(columns["primary_email"])
-            if normalized is None:
-                raise ValidationError(
-                    f"{columns['primary_email']!r} is not a valid email address"
-                )
-            columns["primary_email"] = normalized
-        _normalize_country_column(columns, "tax_residence_country")
-        _normalize_country_column(columns, "citizenship_country")
+    if entity == "organization" and "name" in columns:
+        columns["name_normalized"] = identity.normalize_name(columns["name"]) or ""
+    if entity == "person" and "full_name" in columns:
+        columns["name_normalized"] = identity.normalize_name(columns["full_name"]) or ""
 
 
-def _normalize_country_column(columns: dict[str, Any], column: str) -> None:
-    """Shared by every ISO-3166-1 country column (`domicile_country`,
-    `tax_residence_country`, `citizenship_country`) so the validate-and-
-    overwrite-in-place shape lives once, matching `primary_email` above."""
-    from server.core import identity
-
-    if column not in columns or not columns[column]:
-        return
-    normalized = identity.normalize_country(columns[column])
-    if normalized is None:
-        raise ValidationError(f"{columns[column]!r} is not a valid ISO-3166-1 country code")
-    columns[column] = normalized
+def _apply_field_normalizers(entity: str, columns: dict[str, Any]) -> None:
+    """Validate-and-canonicalize every present, truthy field whose
+    `FieldSpec` declares a `normalize` callable, in place, before the row is
+    written -- e.g. `identity.normalize_email`/`normalize_country` on the
+    fields that declare them in `registry.py`. Generic across every entity,
+    core or module-owned: this is what lets `modules/funds`'
+    `investment_account.domicile_country` reuse `identity.normalize_country()`
+    exactly like `organizations`/`persons` do, without this file ever
+    learning `investment_account` exists (R6), and without a module falling
+    back to a validator that can only reject, never rewrite, a column (R1).
+    """
+    spec = registry.entity(entity)
+    for name, fspec in spec.fields.items():
+        if fspec.normalize is None or not columns.get(name):
+            continue
+        normalized = fspec.normalize(columns[name])
+        if normalized is None:
+            raise ValidationError(f"{columns[name]!r} is not a valid {name}")
+        columns[name] = normalized
 
 
 def _event(
