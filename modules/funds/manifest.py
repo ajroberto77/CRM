@@ -27,7 +27,7 @@ as a co-investor, and accumulates its own interactions, at no extra cost.
 """
 from __future__ import annotations
 
-from server.core import identity
+from server.core import identity, permissions, registry, repository
 from server.core.registry import (
     AssociationRole,
     EntitySpec,
@@ -45,6 +45,27 @@ ACCOUNT_TYPES = (
     "foundation", "endowment", "spv", "other",
 )
 ACCOUNT_STATUSES = ("prospect", "onboarding", "active", "restricted", "closed")
+
+# core.gp_roles, seeded per-org at creation (see _seed_gp_roles below) --
+# describes what someone actually does at a GP firm (Managing Partner, CFO,
+# ...). Deliberately a plain admin-configurable reference list, the same
+# shape as investor_portal's investor_categories, rather than a fixed enum:
+# the user was explicit this must stay pure description and never get wired
+# to portal/permission logic -- that's a separate, later milestone, and
+# `principal_of`'s `attributes.gp_role_key` (a soft reference, see
+# install() below) can't leak into it because core.associations has no
+# owner_id and is structurally excluded from visibility_predicate().
+_SEED_GP_ROLES = (
+    {"key": "managing_partner", "label": "Managing Partner", "sort_order": 0},
+    {"key": "general_partner", "label": "General Partner", "sort_order": 1},
+    {"key": "cfo", "label": "CFO", "sort_order": 2},
+    {"key": "coo", "label": "COO", "sort_order": 3},
+    {"key": "cio", "label": "CIO", "sort_order": 4},
+    {"key": "investor_relations", "label": "Investor Relations", "sort_order": 5},
+    {"key": "analyst", "label": "Analyst", "sort_order": 6},
+    {"key": "operations", "label": "Operations", "sort_order": 7},
+    {"key": "other", "label": "Other", "sort_order": 8},
+)
 
 # Module-owned tables, merged into the schema by db/schema.py's ordinary
 # migration path. Declared here rather than in core so the vertical is
@@ -132,6 +153,23 @@ TABLES: dict[str, dict[str, str]] = {
         "created_at": "timestamptz NOT NULL DEFAULT now()",
         "updated_at": "timestamptz NOT NULL DEFAULT now()",
     },
+    # Admin-configurable "what does this person actually do at the GP" --
+    # same shape as investor_portal's core.investor_categories, seeded per-
+    # org (see _seed_gp_roles). Referenced only as a soft key
+    # (associations.attributes.gp_role_key on `principal_of`), never a real
+    # FK from core.associations -- see install()'s comment on that role.
+    "core.gp_roles": {
+        "id": "uuid PRIMARY KEY DEFAULT gen_random_uuid()",
+        "org_id": "uuid NOT NULL REFERENCES core.orgs(id) ON DELETE CASCADE",
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "key": "text NOT NULL DEFAULT ''",
+        "label": "text NOT NULL DEFAULT ''",
+        "is_enabled": "boolean NOT NULL DEFAULT true",
+        "sort_order": "integer NOT NULL DEFAULT 0",
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": "timestamptz NOT NULL DEFAULT now()",
+        "updated_at": "timestamptz NOT NULL DEFAULT now()",
+    },
 }
 
 INDEXES: tuple[str, ...] = (
@@ -163,6 +201,8 @@ INDEXES: tuple[str, ...] = (
     "ON core.investment_accounts (org_id, person_id)",
     "CREATE INDEX IF NOT EXISTS ix_investment_accounts_custom_gin "
     "ON core.investment_accounts USING gin (custom jsonb_path_ops)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_gp_roles_org_key "
+    "ON core.gp_roles (org_id, key)",
 )
 
 
@@ -177,6 +217,17 @@ def _spine(extra: dict[str, FieldSpec]) -> dict[str, FieldSpec]:
     }
     base.update(extra)
     return base
+
+
+def _seed_gp_roles(org_id: str) -> None:
+    """Called once, right after an org is created (see
+    `registry.register_org_seed`) -- same pattern as investor_portal's
+    `_seed_investor_categories`. All 9 seeded enabled: unlike investor
+    categories there is no compliance reason to ship any of these disabled
+    by default."""
+    principal = permissions.system_principal(org_id, "seed default GP roles")
+    for row in _SEED_GP_ROLES:
+        repository.create(principal, "gp_role", dict(row))
 
 
 def install() -> None:
@@ -237,6 +288,18 @@ def install() -> None:
         }),
     ))
 
+    register(EntitySpec(
+        name="gp_role", table="core.gp_roles", label="GP roles", module=MODULE,
+        label_field="label", admin_only=True, supports_custom_fields=False,
+        default_sort=(("sort_order", "asc"),),
+        fields=_spine({
+            "key": FieldSpec("key", "text", column="key", required=True),
+            "label": FieldSpec("label", "text", column="label", required=True),
+            "is_enabled": FieldSpec("is_enabled", "boolean", column="is_enabled"),
+            "sort_order": FieldSpec("sort_order", "number", column="sort_order"),
+        }),
+    ))
+
     # The vertical's relationship vocabulary. Core knows none of these words.
     register_role(AssociationRole(
         "lp_in", ("organization", "person"), ("fund",),
@@ -270,3 +333,47 @@ def install() -> None:
     register_role(AssociationRole(
         "rolls_up_to", ("organization", "investment_account"), ("organization",),
         inverse_label="rolls up from", hierarchical=True, module=MODULE))
+
+    # Roles at the GP level (person -> organization). `principal_of` is
+    # deliberately the only one that carries a functional title, via
+    # `attributes.gp_role_key` -- a soft reference to `core.gp_roles.key`,
+    # not a real FK column on `core.associations`: adding one there for one
+    # vertical's need would put vertical vocabulary on a generic core table
+    # (R6), the same reason `attributes` exists at all ("role-specific
+    # extras that don't deserve columns... title, board seat type,
+    # ownership %", docs/VERTICAL-ASSET-MANAGEMENT.md). This is pure
+    # description of who does what -- it is NOT wired to portal access or
+    # any permission decision, and structurally can't be: associations have
+    # no `owner_id` and are excluded from `visibility_predicate()`.
+    register_role(AssociationRole(
+        "principal_of", ("person",), ("organization",),
+        inverse_label="principals", module=MODULE))
+    # No separate `beneficial_owner_of` role: core's `owned_by` already
+    # covers a person owning an organization directly (its own docstring
+    # names exactly this GP-with-no-corporate-parent case), including the
+    # hierarchy traversal (server/core/hierarchy.py's cycle-checked
+    # recursive CTE) a second, non-hierarchical role would lose. Beneficial
+    # ownership is `owned_by` with `attributes.ownership_type="beneficial"`
+    # (and, later, a percentage) when that AML/KYC distinction from
+    # ordinary equity ownership needs to be recorded -- the same
+    # attributes-carries-the-extras convention `principal_of`'s
+    # `gp_role_key` uses above, not a new role.
+    #
+    # Spans both levels -- the same person can be an authorized signer at
+    # the GP or on a specific account, and it's one concept, not two.
+    register_role(AssociationRole(
+        "authorized_signer_for", ("person",), ("organization", "investment_account"),
+        inverse_label="authorized signers", module=MODULE))
+
+    # Roles at the account level (person -> investment_account).
+    register_role(AssociationRole(
+        "account_holder_of", ("person",), ("investment_account",),
+        inverse_label="account holders", module=MODULE))
+    register_role(AssociationRole(
+        "trustee_of", ("person",), ("investment_account",),
+        inverse_label="trustees", module=MODULE))
+    register_role(AssociationRole(
+        "beneficiary_of", ("person",), ("investment_account",),
+        inverse_label="beneficiaries", module=MODULE))
+
+    registry.register_org_seed(_seed_gp_roles, module=MODULE)
