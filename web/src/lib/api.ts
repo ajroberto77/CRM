@@ -20,6 +20,33 @@ export class ApiError extends Error {
   }
 }
 
+/** FastAPI's own `detail` shape varies by failure kind: a plain string for a
+ * hand-raised HTTPException (`server/api/*.py`'s own `raise HTTPException(...,
+ * detail="...")` calls), but an ARRAY of `{loc, msg, type}` objects for a
+ * Pydantic request-validation failure (422s FastAPI raises itself, before any
+ * route code runs -- e.g. `SetupRequest`'s `min_length` constraints). A bare
+ * `String(detail)` on that array stringifies each object via its default
+ * `Object.prototype.toString`, producing the literal text "[object Object]"
+ * instead of the validation message -- this is the one place either shape is
+ * turned into text, so it has to handle both. */
+function errorDetailText(detail: unknown): string {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        if (item && typeof item === 'object' && 'msg' in item) {
+          const loc = (item as { loc?: unknown }).loc
+          const field = Array.isArray(loc) ? loc.filter((p) => p !== 'body').join('.') : ''
+          const msg = String((item as { msg: unknown }).msg)
+          return field ? `${field}: ${msg}` : msg
+        }
+        return String(item)
+      })
+      .join('; ')
+  }
+  return String(detail)
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -40,7 +67,7 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const detail =
       isJson && body && typeof body === 'object' && 'detail' in body
-        ? String((body as { detail: unknown }).detail)
+        ? errorDetailText((body as { detail: unknown }).detail)
         : String(body)
     throw new ApiError(response.status, detail || response.statusText)
   }
