@@ -101,7 +101,7 @@ export function ConnectedAccountsPage() {
         <h1>Connected Accounts</h1>
       </div>
       <p className="crm-settings-hint">
-        Link your Microsoft or Google account to sync contacts into the CRM.
+        Link your Microsoft or Google account to sync contacts into Greens Ledge.
       </p>
 
       {error && <div className="crm-auth-error">{error}</div>}

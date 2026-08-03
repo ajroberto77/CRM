@@ -167,17 +167,47 @@ button:disabled {
 }
 
 .crm-titlebar-org {
-  /* Not --accent-hover -- tokens.css defines --text-on-chrome/-muted
-     specifically because a raw accent color on the navy chrome background
-     fails WCAG AA contrast in light mode (~3.9:1); every other titlebar
-     text uses one of those two tokens, this should too. */
-  color: var(--text-on-chrome);
+  /* Deliberately NOT --display/uppercase/bold like .crm-titlebar-logo --
+     the wordmark and the org name need to read as two distinct things,
+     not one blended lockup. Plain --sans, regular weight, italic, and the
+     muted chrome-text token (already used for .crm-titlebar-user, so this
+     is a known-good contrast pairing rather than a new one) all push the
+     org name toward "secondary label" rather than a second logo. */
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--sans);
+  font-style: italic;
+  font-weight: 400;
   font-size: var(--fs-small);
-  font-weight: 600;
+  color: var(--text-on-chrome-muted);
+}
+
+.crm-titlebar-org-sep {
+  font-style: normal;
+  opacity: 0.6;
 }
 
 .crm-titlebar-spacer {
   flex: 1;
+}
+
+.crm-titlebar-settings {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  color: var(--text-on-chrome-muted);
+  text-decoration: none;
+  font-size: var(--fs-title);
+  flex-shrink: 0;
+}
+
+.crm-titlebar-settings:hover,
+.crm-titlebar-settings-active {
+  color: var(--text-on-chrome);
 }
 
 .crm-titlebar-user {
@@ -226,13 +256,6 @@ button:disabled {
   background: var(--tint-accent-bg);
   color: var(--accent);
   font-weight: 600;
-}
-
-.crm-sidebar-settings-icon {
-  display: inline-block;
-  width: 1.2em;
-  margin-right: 6px;
-  text-align: center;
 }
 
 .crm-sidebar-divider {
@@ -1026,15 +1049,49 @@ button:disabled {
 }
 
 /* ── Settings shell ───────────────────────────────────────────────────── */
-/* The single Settings entry point's own full-page two-pane layout -- a
-   left sub-nav (same visual language as .crm-sidebar-link) plus a content
-   pane, distinct from .crm-settings-page (which is a single-column body
+/* The single Settings entry point's own full-page takeover -- a header
+   (title + Close, mirroring CATO's settings-page-header) above a
+   left section-nav (same visual language as .crm-sidebar-link) plus a
+   content pane, distinct from .crm-settings-page (a single-column body
    wrapper used *inside* this content pane by each settings screen). */
 
 .crm-settings-shell {
   display: flex;
-  gap: var(--content-pad);
+  flex-direction: column;
+  gap: 20px;
   height: 100%;
+}
+
+.crm-settings-shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+}
+
+.crm-settings-shell-header h1 {
+  font-size: var(--fs-title);
+  margin: 0;
+}
+
+.crm-settings-shell-close {
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+  text-decoration: none;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.crm-settings-shell-close:hover {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+
+.crm-settings-shell-body {
+  display: flex;
+  gap: var(--content-pad);
+  flex: 1;
+  min-height: 0;
 }
 
 .crm-settings-shell-nav {
@@ -1052,6 +1109,7 @@ button:disabled {
 .crm-settings-shell-content {
   flex: 1;
   min-width: 0;
+  overflow-y: auto;
 }
 
 /* ── Home page ────────────────────────────────────────────────────────── */

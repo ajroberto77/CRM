@@ -28,7 +28,7 @@ export function SetupPage() {
   return (
     <div className="crm-auth-screen">
       <form className="crm-auth-card" onSubmit={onSubmit}>
-        <div className="crm-auth-logo">CRM</div>
+        <div className="crm-auth-logo">Greens Ledge</div>
         <h1>Create your organization</h1>
         <p className="crm-auth-subtitle">This is the first-run setup -- it creates the org and its first administrator.</p>
         {error && <div className="crm-auth-error">{error}</div>}

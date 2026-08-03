@@ -26,7 +26,7 @@ export function LoginPage() {
   return (
     <div className="crm-auth-screen">
       <form className="crm-auth-card" onSubmit={onSubmit}>
-        <div className="crm-auth-logo">CRM</div>
+        <div className="crm-auth-logo">Greens Ledge</div>
         <h1>Sign in</h1>
         {error && <div className="crm-auth-error">{error}</div>}
         <label>
