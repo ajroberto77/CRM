@@ -20,8 +20,14 @@ interface ObjectPermissions {
   field_masks: string[]
 }
 
+interface CurrentOrg {
+  id: string
+  name: string
+}
+
 interface MeResponse {
   user: CurrentUser
+  org: CurrentOrg
   is_admin: boolean
   permissions: Record<string, ObjectPermissions>
 }
@@ -29,6 +35,7 @@ interface MeResponse {
 interface AuthState {
   status: 'loading' | 'anonymous' | 'authenticated'
   user: CurrentUser | null
+  org: CurrentOrg | null
   permissions: Record<string, ObjectPermissions>
   firstRunRequired: boolean
   login: (email: string, password: string) => Promise<void>
@@ -42,6 +49,7 @@ const AuthContext = createContext<AuthState | null>(null)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthState['status']>('loading')
   const [user, setUser] = useState<CurrentUser | null>(null)
+  const [org, setOrg] = useState<CurrentOrg | null>(null)
   const [permissions, setPermissions] = useState<Record<string, ObjectPermissions>>({})
   const [firstRunRequired, setFirstRunRequired] = useState(false)
 
@@ -52,16 +60,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (setupStatus.first_run_required) {
         setStatus('anonymous')
         setUser(null)
+        setOrg(null)
         return
       }
       const me = await apiGet<MeResponse>('/auth/me')
       setUser(me.user)
+      setOrg(me.org)
       setPermissions(me.permissions)
       setStatus('authenticated')
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setStatus('anonymous')
         setUser(null)
+        setOrg(null)
         return
       }
       throw err
@@ -80,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     await apiPost('/auth/logout')
     setUser(null)
+    setOrg(null)
     setPermissions({})
     setStatus('anonymous')
   }, [])
@@ -93,8 +105,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo<AuthState>(
-    () => ({ status, user, permissions, firstRunRequired, login, logout, setup, refresh }),
-    [status, user, permissions, firstRunRequired, login, logout, setup, refresh],
+    () => ({ status, user, org, permissions, firstRunRequired, login, logout, setup, refresh }),
+    [status, user, org, permissions, firstRunRequired, login, logout, setup, refresh],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

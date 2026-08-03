@@ -91,7 +91,7 @@ export function ConnectedAccountsPage() {
     }
   }
 
-  if (loading) return <div className="crm-app-loading">Loading…</div>
+  if (loading) return <div className="crm-table-status">Loading…</div>
 
   const linkedProviders = new Set(accountsList.map((a) => a.provider))
 

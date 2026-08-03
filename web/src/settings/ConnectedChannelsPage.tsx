@@ -91,7 +91,7 @@ export function ConnectedChannelsPage() {
     }
   }
 
-  if (loading) return <div className="crm-app-loading">Loading…</div>
+  if (loading) return <div className="crm-table-status">Loading…</div>
 
   return (
     <div className="crm-settings-page">

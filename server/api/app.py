@@ -250,8 +250,10 @@ def me(principal: Principal = Depends(auth.current_principal)) -> dict[str, Any]
     user = users.get_user(principal.org_id, principal.user_id)
     if user is None:
         raise auth.UNAUTHENTICATED
+    org = users.get_org(principal.org_id)
     return {
         "user": _public_user(user),
+        "org": {"id": principal.org_id, "name": org["name"] if org else ""},
         "is_admin": principal.is_admin,
         "permissions": {
             obj: {

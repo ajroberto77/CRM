@@ -172,7 +172,7 @@ export function LlmSettingsPage() {
     setField('chain', next)
   }
 
-  if (loading) return <div className="crm-app-loading">Loading…</div>
+  if (loading) return <div className="crm-table-status">Loading…</div>
 
   if (loadError) {
     return (

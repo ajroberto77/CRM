@@ -166,6 +166,16 @@ button:disabled {
   font-weight: 700;
 }
 
+.crm-titlebar-org {
+  /* Not --accent-hover -- tokens.css defines --text-on-chrome/-muted
+     specifically because a raw accent color on the navy chrome background
+     fails WCAG AA contrast in light mode (~3.9:1); every other titlebar
+     text uses one of those two tokens, this should too. */
+  color: var(--text-on-chrome);
+  font-size: var(--fs-small);
+  font-weight: 600;
+}
+
 .crm-titlebar-spacer {
   flex: 1;
 }
@@ -216,6 +226,20 @@ button:disabled {
   background: var(--tint-accent-bg);
   color: var(--accent);
   font-weight: 600;
+}
+
+.crm-sidebar-settings-icon {
+  display: inline-block;
+  width: 1.2em;
+  margin-right: 6px;
+  text-align: center;
+}
+
+.crm-sidebar-divider {
+  height: 1px;
+  background: var(--border-default);
+  margin: 8px 4px;
+  flex-shrink: 0;
 }
 
 .crm-content {
@@ -999,4 +1023,102 @@ button:disabled {
 
 .crm-multiselect-taginput:focus {
   outline: none;
+}
+
+/* ── Settings shell ───────────────────────────────────────────────────── */
+/* The single Settings entry point's own full-page two-pane layout -- a
+   left sub-nav (same visual language as .crm-sidebar-link) plus a content
+   pane, distinct from .crm-settings-page (which is a single-column body
+   wrapper used *inside* this content pane by each settings screen). */
+
+.crm-settings-shell {
+  display: flex;
+  gap: var(--content-pad);
+  height: 100%;
+}
+
+.crm-settings-shell-nav {
+  width: 200px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* No separate crm-settings-shell-link class -- SettingsShell.tsx's sub-nav
+   reuses .crm-sidebar-link/-active directly, since the two are the same
+   nav-link recipe and a second copy would only drift from the first. */
+
+.crm-settings-shell-content {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ── Home page ────────────────────────────────────────────────────────── */
+
+.crm-home-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.crm-home-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface-base);
+  box-shadow: var(--shadow-card);
+  text-decoration: none;
+  color: inherit;
+}
+
+a.crm-home-tile:hover {
+  background: var(--surface-raised);
+}
+
+.crm-home-tile-wide {
+  grid-column: 1 / -1;
+  cursor: default;
+}
+
+.crm-home-tile-value {
+  /* No display-scale token exists in tokens.css (the largest is
+     --fs-title) -- derive from it rather than adding a one-use literal
+     size, per R5. */
+  font-size: calc(var(--fs-title) * 1.75);
+  font-weight: 700;
+}
+
+.crm-home-tile-label {
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+
+.crm-home-task-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.crm-home-task-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-body);
+}
+
+.crm-home-task-due,
+.crm-home-task-overdue {
+  font-size: var(--fs-tiny);
+  color: var(--text-subtle);
+}
+
+.crm-home-task-overdue {
+  color: var(--status-error);
 }

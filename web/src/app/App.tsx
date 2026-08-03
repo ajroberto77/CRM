@@ -3,8 +3,9 @@ import { useAuth } from '../auth/AuthContext'
 import { LoginPage } from '../auth/LoginPage'
 import { SetupPage } from '../auth/SetupPage'
 import { Shell } from './Shell'
+import { HomePage } from './HomePage'
 import { EntityListPage } from '../records/EntityListPage'
-import { useEntityList } from '../records/useEntitySchema'
+import { SettingsShell } from '../settings/SettingsShell'
 import { LlmSettingsPage } from '../settings/LlmSettingsPage'
 import { ConnectedAccountsPage } from '../settings/ConnectedAccountsPage'
 import { ConnectedChannelsPage } from '../settings/ConnectedChannelsPage'
@@ -24,32 +25,28 @@ export function App() {
   return (
     <Routes>
       <Route element={<Shell />}>
-        <Route index element={<HomeRedirect />} />
+        <Route index element={<HomePage />} />
         <Route path="e/:entity" element={<EntityListPage />} />
         <Route path="e/:entity/:recordId" element={<EntityListPage />} />
-        {/* Not "/settings/*" -- that prefix is proxied straight to the
+        {/* Not "/settings/*" -- that whole prefix is proxied straight to
+            the backend API (vite.config.ts), which really does own
+            "/settings/llm" etc. as real JSON routes (server/api/settings.py).
+            A hard reload or deep link to a client route living there would
+            hit the backend instead of the SPA. Mounted under "admin/" for
+            the same reason "review/proposals" (not "/proposals") was
+            chosen below -- avoid every proxied API prefix. */}
+        <Route path="admin/settings" element={<SettingsShell />}>
+          <Route index element={<Navigate to="connected-accounts" replace />} />
+          <Route path="llm" element={<LlmSettingsPage />} />
+          <Route path="connected-accounts" element={<ConnectedAccountsPage />} />
+          <Route path="connected-channels" element={<ConnectedChannelsPage />} />
+        </Route>
+        {/* Not "/proposals/*" -- that prefix is proxied straight to the
             backend API (vite.config.ts), so a page reload here would hit
-            GET /settings/llm on the server instead of the SPA shell. */}
-        <Route path="admin/llm-settings" element={<LlmSettingsPage />} />
-        <Route path="admin/connected-accounts" element={<ConnectedAccountsPage />} />
-        {/* Not "/channels/*" -- same reload/proxy-collision reasoning as
-            above; that prefix is proxied straight to the backend API. */}
-        <Route path="admin/connected-channels" element={<ConnectedChannelsPage />} />
-        {/* Not "/proposals/*" -- same reload/proxy-collision reasoning as
-            above; that prefix is proxied straight to the backend API. */}
+            GET /proposals on the server instead of the SPA shell. */}
         <Route path="review/proposals" element={<PendingProposalsPage />} />
-        <Route path="*" element={<HomeRedirect />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
   )
-}
-
-/** Lands on the first entity the user can read -- there is no hardcoded
- * "home" entity, since which entities exist is itself driven by the
- * registry (R4). */
-function HomeRedirect() {
-  const { entities, loading } = useEntityList()
-  if (loading) return <div className="crm-app-loading">Loading…</div>
-  if (entities.length === 0) return <div className="crm-table-status">No entities available.</div>
-  return <Navigate to={`/e/${entities[0].name}`} replace />
 }
