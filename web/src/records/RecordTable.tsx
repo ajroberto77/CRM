@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { apiPatch, apiPost, withQuery, apiGet, ApiError } from '../lib/api'
+import { useMemo, useState } from 'react'
+import { apiPatch, apiPost, ApiError } from '../lib/api'
 import { formatValue } from '../lib/format'
 import { FieldInput } from './FieldInput'
-import type { EntitySchema, FilterNode, ListResult, RecordRow, SortSpec } from './types'
+import { useRecordList } from './useRecordList'
+import type { EntitySchema, FilterNode, RecordRow, SortSpec } from './types'
 
 interface RecordTableProps {
   entity: string
@@ -27,9 +28,6 @@ function defaultColumns(schema: EntitySchema): string[] {
 }
 
 export function RecordTable({ entity, schema, filters, sort, columns, onOpenRecord, refreshToken }: RecordTableProps) {
-  const [result, setResult] = useState<ListResult | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
   const [editingCell, setEditingCell] = useState<{ id: string; field: string } | null>(null)
   const [savingCell, setSavingCell] = useState(false)
 
@@ -39,19 +37,7 @@ export function RecordTable({ entity, schema, filters, sort, columns, onOpenReco
     [sort, schema],
   )
 
-  useEffect(() => {
-    setLoading(true)
-    setError(null)
-    const path = withQuery(`/records/${entity}`, {
-      filter: filters ?? undefined,
-      sort: effectiveSort,
-      limit: 200,
-    })
-    apiGet<ListResult>(path)
-      .then(setResult)
-      .catch((err) => setError(err instanceof ApiError ? err.detail : String(err)))
-      .finally(() => setLoading(false))
-  }, [entity, filters, effectiveSort, refreshToken])
+  const { result, loading, error, setResult } = useRecordList(entity, filters, effectiveSort, refreshToken)
 
   async function saveCell(row: RecordRow, field: string, value: unknown) {
     setSavingCell(true)
