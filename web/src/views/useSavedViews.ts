@@ -39,20 +39,31 @@ export function useSavedViews(entity: string) {
     reload()
   }, [reload])
 
-  async function saveView(name: string, filters: FilterNode | null, sort: SortSpec[] | null, columns: string[] | null) {
+  async function saveView(
+    name: string,
+    filters: FilterNode | null,
+    sort: SortSpec[] | null,
+    columns: string[] | null,
+    kind: SavedView['kind'] = 'table',
+    groupBy: string | null = null,
+  ) {
     // Omit null optional fields rather than sending an explicit JSON null --
-    // core.saved_views' filters/sort/columns columns are NOT NULL with a
-    // DEFAULT, which only applies when the column is left out of the INSERT
-    // entirely, not when the client sends `null` for it.
-    const body: Record<string, unknown> = { entity, name, kind: 'table' }
+    // core.saved_views' filters/sort/columns/group_by columns are NOT NULL
+    // with a DEFAULT, which only applies when the column is left out of the
+    // INSERT entirely, not when the client sends `null` for it.
+    const body: Record<string, unknown> = { entity, name, kind }
     if (filters !== null) body.filters = filters
     if (sort !== null) body.sort = sort
     if (columns !== null) body.columns = columns
+    if (groupBy !== null) body.group_by = groupBy
     await apiPost('/records/saved_view', body)
     await reload()
   }
 
-  async function updateView(id: string, changes: Partial<Pick<SavedView, 'filters' | 'sort' | 'columns' | 'name'>>) {
+  async function updateView(
+    id: string,
+    changes: Partial<Pick<SavedView, 'filters' | 'sort' | 'columns' | 'name' | 'kind' | 'group_by'>>,
+  ) {
     await apiPatch(`/records/saved_view/${id}`, { changes })
     await reload()
   }

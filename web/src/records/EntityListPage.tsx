@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useEntitySchema } from './useEntitySchema'
 import { RecordTable } from './RecordTable'
+import { RecordBoard } from './RecordBoard'
 import { RecordDetail } from './RecordDetail'
 import { CreateRecordModal } from './CreateRecordModal'
 import { ViewSwitcher } from '../views/ViewSwitcher'
@@ -60,8 +61,11 @@ function EntityListPageForEntity() {
         {canUseViews && <ViewSwitcher
           views={views}
           activeViewId={activeView?.id ?? null}
+          schema={schema}
           onSelect={setActiveView}
-          onSaveCurrent={(name) => saveView(name, activeView?.filters ?? null, activeView?.sort ?? null, activeView?.columns ?? null)}
+          onSaveCurrent={(name, kind, groupBy) =>
+            saveView(name, activeView?.filters ?? null, activeView?.sort ?? null, activeView?.columns ?? null, kind, groupBy)
+          }
           onDelete={(id) => {
             deleteView(id)
             if (activeView?.id === id) setActiveView(null)
@@ -71,15 +75,27 @@ function EntityListPageForEntity() {
 
       <div className="crm-entity-page-body">
         <div className={recordId ? 'crm-entity-page-table crm-entity-page-table-split' : 'crm-entity-page-table'}>
-          <RecordTable
-            entity={entity}
-            schema={schema}
-            filters={filters}
-            sort={activeView?.sort ?? null}
-            columns={activeView?.columns ?? null}
-            onOpenRecord={(id) => navigate(`/e/${entity}/${id}`)}
-            refreshToken={refreshToken}
-          />
+          {activeView?.kind === 'board' && activeView.group_by ? (
+            <RecordBoard
+              entity={entity}
+              schema={schema}
+              filters={filters}
+              sort={activeView?.sort ?? null}
+              groupBy={activeView.group_by}
+              onOpenRecord={(id) => navigate(`/e/${entity}/${id}`)}
+              refreshToken={refreshToken}
+            />
+          ) : (
+            <RecordTable
+              entity={entity}
+              schema={schema}
+              filters={filters}
+              sort={activeView?.sort ?? null}
+              columns={activeView?.columns ?? null}
+              onOpenRecord={(id) => navigate(`/e/${entity}/${id}`)}
+              refreshToken={refreshToken}
+            />
+          )}
         </div>
 
         {recordId && (

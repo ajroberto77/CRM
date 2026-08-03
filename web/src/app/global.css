@@ -798,3 +798,141 @@ button:disabled {
   gap: 8px;
   align-items: center;
 }
+
+/* ── View switcher: board indicator ──────────────────────────────────── */
+
+.crm-view-pill-board-icon {
+  font-size: var(--fs-tiny);
+  opacity: 0.7;
+}
+
+/* ── Record board (kanban) ───────────────────────────────────────────── */
+
+.crm-record-board {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.crm-record-board-toolbar {
+  display: flex;
+  align-items: center;
+}
+
+.crm-record-board-total {
+  color: var(--text-subtle);
+  font-size: var(--fs-tiny);
+}
+
+.crm-record-board-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-small);
+  color: var(--text-secondary);
+}
+
+.crm-record-board-lanes {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  align-items: flex-start;
+  padding-bottom: 4px;
+}
+
+.crm-record-board-lane {
+  flex: 0 0 260px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 260px);
+}
+
+.crm-record-board-lane-over {
+  border-color: var(--tint-accent-border);
+  background: var(--tint-accent-bg);
+}
+
+.crm-record-board-lane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  font-size: var(--fs-tiny);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.crm-record-board-lane-count {
+  background: var(--surface-strong);
+  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+  font-size: var(--fs-micro);
+}
+
+.crm-record-board-lane-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  overflow-y: auto;
+}
+
+.crm-record-board-lane-empty {
+  color: var(--text-subtle);
+  font-size: var(--fs-small);
+  text-align: center;
+  padding: 8px 0;
+}
+
+.crm-record-board-card {
+  background: var(--surface-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: 10px;
+  cursor: grab;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crm-record-board-card:hover {
+  background: var(--surface-raised);
+}
+
+.crm-record-board-card-moving {
+  opacity: 0.5;
+}
+
+.crm-record-board-card-title {
+  font-weight: 500;
+  font-size: var(--fs-body);
+  /* Same guard .crm-settings-provider-card already needed for unconstrained
+     extracted text -- a label_field value (deal name, ticker, ISIN) can be
+     one long unbroken token that would otherwise push past the card. */
+  overflow-wrap: anywhere;
+}
+
+.crm-record-board-card-meta {
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+}
+
+.crm-record-board-card-rotting {
+  align-self: flex-start;
+  background: var(--tint-warn-bg);
+  border: 1px solid var(--tint-warn-border);
+  color: var(--status-warn);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  font-size: var(--fs-micro);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
