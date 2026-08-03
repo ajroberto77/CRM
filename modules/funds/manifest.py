@@ -94,26 +94,6 @@ TABLES: dict[str, dict[str, str]] = {
         "created_at": "timestamptz NOT NULL DEFAULT now()",
         "updated_at": "timestamptz NOT NULL DEFAULT now()",
     },
-    "core.commitments": {
-        "id": "uuid PRIMARY KEY DEFAULT gen_random_uuid()",
-        "org_id": "uuid NOT NULL REFERENCES core.orgs(id) ON DELETE CASCADE",
-        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
-        "fund_id": "uuid REFERENCES core.funds(id) ON DELETE CASCADE",
-        # An institutional LP is an entity with contacts hanging off it; an
-        # individual LP is a person. Both commit, so both are expressible.
-        "investor_org_id": "uuid REFERENCES core.organizations(id) ON DELETE SET NULL",
-        "investor_person_id": "uuid REFERENCES core.persons(id) ON DELETE SET NULL",
-        "amount": "numeric(18,2)",
-        "currency": "text NOT NULL DEFAULT 'USD'",
-        "committed_at": "date",
-        "status": (
-            "text NOT NULL DEFAULT 'soft' "
-            "CHECK (status IN ('soft','signed','closed','withdrawn'))"
-        ),
-        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
-        "created_at": "timestamptz NOT NULL DEFAULT now()",
-        "updated_at": "timestamptz NOT NULL DEFAULT now()",
-    },
     # The investment vehicle layer: the actual thing that commits capital --
     # a trust, an LLC, an IRA, a personal account, an SPV. `entity_org_id`
     # mirrors `funds.entity_org_id` (the account's own legal entity, when it
@@ -124,6 +104,12 @@ TABLES: dict[str, dict[str, str]] = {
     # precedent this table is falling short of. Not a CHECK here either,
     # since "exactly one of two nullable
     # FKs" is the same shape already accepted there without one.
+    #
+    # Declared BEFORE core.commitments (which gets an FK to this table in
+    # Phase E) -- table creation follows dict insertion order, and an FK
+    # must point at an already-created table (the same backwards-FK
+    # convention modules/investor_portal's pathway_vehicles -> core.funds
+    # already established).
     "core.investment_accounts": {
         "id": "uuid PRIMARY KEY DEFAULT gen_random_uuid()",
         "org_id": "uuid NOT NULL REFERENCES core.orgs(id) ON DELETE CASCADE",
@@ -148,6 +134,37 @@ TABLES: dict[str, dict[str, str]] = {
         "status": (
             "text NOT NULL DEFAULT 'prospect' CHECK (status IN ("
             "'prospect','onboarding','active','restricted','closed'))"
+        ),
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": "timestamptz NOT NULL DEFAULT now()",
+        "updated_at": "timestamptz NOT NULL DEFAULT now()",
+    },
+    "core.commitments": {
+        "id": "uuid PRIMARY KEY DEFAULT gen_random_uuid()",
+        "org_id": "uuid NOT NULL REFERENCES core.orgs(id) ON DELETE CASCADE",
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "fund_id": "uuid REFERENCES core.funds(id) ON DELETE CASCADE",
+        # Phase E: the investment vehicle that actually made this
+        # commitment. Added alongside the two columns below rather than
+        # replacing them -- existing rows need `modules/funds/backfill.py`
+        # run once before every commitment has one, and dropping
+        # investor_org_id/investor_person_id before every deployment has
+        # backfilled is a destructive step for a later pass, not this one.
+        "investment_account_id": (
+            "uuid REFERENCES core.investment_accounts(id) ON DELETE SET NULL"
+        ),
+        # An institutional LP is an entity with contacts hanging off it; an
+        # individual LP is a person. Both commit, so both are expressible.
+        # Superseded by investment_account_id above once a commitment has
+        # been backfilled; kept until every existing row has one.
+        "investor_org_id": "uuid REFERENCES core.organizations(id) ON DELETE SET NULL",
+        "investor_person_id": "uuid REFERENCES core.persons(id) ON DELETE SET NULL",
+        "amount": "numeric(18,2)",
+        "currency": "text NOT NULL DEFAULT 'USD'",
+        "committed_at": "date",
+        "status": (
+            "text NOT NULL DEFAULT 'soft' "
+            "CHECK (status IN ('soft','signed','closed','withdrawn'))"
         ),
         "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
         "created_at": "timestamptz NOT NULL DEFAULT now()",
@@ -187,6 +204,8 @@ INDEXES: tuple[str, ...] = (
     "ON core.commitments (org_id, fund_id, status)",
     "CREATE INDEX IF NOT EXISTS ix_commitments_org_investor "
     "ON core.commitments (org_id, investor_org_id)",
+    "CREATE INDEX IF NOT EXISTS ix_commitments_org_investment_account "
+    "ON core.commitments (org_id, investment_account_id)",
     "CREATE INDEX IF NOT EXISTS ix_funds_custom_gin "
     "ON core.funds USING gin (custom jsonb_path_ops)",
     "CREATE INDEX IF NOT EXISTS ix_commitments_custom_gin "
@@ -257,6 +276,8 @@ def install() -> None:
         default_sort=(("committed_at", "desc"),),
         fields=_spine({
             "fund_id": FieldSpec("fund_id", "uuid", column="fund_id", required=True),
+            "investment_account_id": FieldSpec("investment_account_id", "uuid",
+                                               column="investment_account_id"),
             "investor_org_id": FieldSpec("investor_org_id", "uuid",
                                          column="investor_org_id"),
             "investor_person_id": FieldSpec("investor_person_id", "uuid",
@@ -301,8 +322,14 @@ def install() -> None:
     ))
 
     # The vertical's relationship vocabulary. Core knows none of these words.
+    # Phase E: `investment_account` added to `from_types` alongside
+    # organization/person -- a commitment is properly made BY an account,
+    # and `lp_in` needs to accept one as an LP the same way it already
+    # accepts a bare org or person (pre-Phase-B commitments that predate
+    # investment_account keep working unchanged; this only widens what a
+    # NEW `lp_in` edge may name on the "from" side).
     register_role(AssociationRole(
-        "lp_in", ("organization", "person"), ("fund",),
+        "lp_in", ("organization", "person", "investment_account"), ("fund",),
         inverse_label="investors", module=MODULE))
     register_role(AssociationRole(
         "gp_of", ("organization", "person"), ("fund",),
