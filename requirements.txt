@@ -13,6 +13,13 @@ pgvector
 # not a JWT/OAuth framework, just RSA signing.
 cryptography
 
+# Loads .env into the environment for local dev (server/config.py) --
+# a real env var an operator set always wins; this only populates what
+# isn't already there. Not a secrets store, just a convenience layer over
+# os.environ, so it doesn't conflict with "secrets live in env, never in
+# the database and never in a config file."
+python-dotenv
+
 # Development only.
 pytest
 httpx

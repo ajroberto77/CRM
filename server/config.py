@@ -27,6 +27,16 @@ from __future__ import annotations
 import os
 from typing import Any, Optional
 
+from dotenv import load_dotenv
+
+# Populates os.environ from a local .env file (git-ignored -- see
+# .env.example) before Config() ever reads it below. A real environment
+# variable the operator already set always wins (load_dotenv's default
+# override=False): this is a local-dev convenience for populating the
+# environment, not a second source of truth competing with it. Secrets still
+# never live in the database or a committed config file -- .env is neither.
+load_dotenv()
+
 
 def _as_bool(value: Any) -> bool:
     if isinstance(value, bool):
