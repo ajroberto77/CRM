@@ -41,8 +41,12 @@ from typing import Any, Iterable, Optional
 from server.db import pool
 
 # The closed set of settings sections. Adding one is a one-line change here;
-# nothing else needs to know the list grew.
-SECTIONS = ("llm", "approval", "pipeline")
+# nothing else needs to know the list grew. "compliance" is read by
+# modules/investor_portal's account-activation gate -- the section name
+# stays domain-neutral (any vertical could have compliance-gating settings)
+# even though today's only reader is one module, the same way "pipeline"
+# is domain-neutral even though today's only reader is deal rotting.
+SECTIONS = ("llm", "approval", "pipeline", "compliance")
 
 
 class UnknownSection(ValueError):

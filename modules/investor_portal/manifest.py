@@ -15,6 +15,24 @@ depends on both, in the same one-way direction already established for
 `pathway_vehicles` -> `core.funds` -- neither `server/core/` nor
 `modules/funds` gains any awareness that `investor_portal` exists.
 
+## Data model Phase D — AML/tax document gating on investment_account
+
+A second validator, same shape and same reasoning as M9d's: an
+`investment_account` (a `modules/funds` entity, added in Phase B) cannot
+reach `status='active'` without its AML/KYC and tax-withholding documents
+on file, executed and unexpired. Lives here rather than in
+`modules/funds/manifest.py` for the same reason `_validate_commitment_closing`
+does -- this is investor-onboarding-compliance logic, this module's whole
+reason to exist, not "funds and commitments exist" logic.
+
+Registered for BOTH `create` and `update` (M9d's gate only covers
+`update`) -- an account could otherwise be created pre-set to `active` in
+one write, skipping the transition check entirely. In practice this can
+never actually satisfy the gate: a compliance document must reference an
+already-existing `subject_id`, so a direct create-as-active request is
+correctly rejected for having zero documents on file, not specially
+detected.
+
 ## M9a — investor classification
 
 "Investor" is still not an entity type (see `modules/funds/manifest.py`'s
@@ -31,9 +49,10 @@ existing organization/person record, not a new relationship.
 """
 from __future__ import annotations
 
-from typing import Any
+from datetime import date
+from typing import Any, Optional
 
-from server.core import events, permissions, registry, repository
+from server.core import events, permissions, registry, repository, settings as core_settings
 from server.core.registry import EntitySpec, FieldSpec, register
 
 MODULE = "investor_portal"
@@ -44,6 +63,19 @@ MODULE = "investor_portal"
 # constant is the one place that vocabulary is spelled, so it is never typo'd
 # differently in two places (R1).
 SUBSCRIPTION_AGREEMENT_KIND = "subscription_agreement"
+
+# The document kinds Phase D's account-activation gate (below) checks for,
+# plus two more that exist as named vocabulary without being part of that
+# specific gate: PROOF_OF_ADDRESS_KIND is typically evidence bundled into
+# an AML_KYC_KIND packet rather than a separately-gated document, and
+# ACCREDITATION_EVIDENCE_KIND backs `investor_profile.accreditation_method`
+# ='verified' -- a different, already-existing workflow, not this one.
+W9_KIND = "w9"
+W8BEN_KIND = "w8ben"
+W8BENE_KIND = "w8bene"
+AML_KYC_KIND = "aml_kyc"
+PROOF_OF_ADDRESS_KIND = "proof_of_address"
+ACCREDITATION_EVIDENCE_KIND = "accreditation_evidence"
 
 # The closed vocabulary for investor_mandate.asset_classes -- free text drifts
 # and silently stops matching, the same failure Cal hit with event categories
@@ -290,6 +322,41 @@ class SubscriptionAgreementMissing(repository.ValidationError):
     identifiable to a caller that wants to react specifically."""
 
 
+def _current_document_exists(
+    principal: permissions.Principal, subject_type: str, subject_id: str, kind: str,
+    *, require_unexpired: bool = False,
+) -> bool:
+    """True iff `subject` has at least one document of `kind`, executed and
+    (when `require_unexpired`) not past its `valid_until`. Shared by both
+    write-time document gates in this module -- M9d's commitment-closing
+    check below and Phase D's account-activation check further down -- so
+    "does an executed document of kind X exist for subject Y" lives in
+    exactly one place (R1).
+
+    The unexpired check is expressed IN the filter tree (an `or` of
+    `valid_until IS NULL` and `valid_until >= today`, both already
+    supported by `server/core/query.py`'s filter DSL), not filtered in
+    Python after the fact -- so `limit=1` alone is correct regardless of
+    how many executed documents of this kind a subject has accumulated,
+    with no arbitrary page-size ceiling to silently outgrow.
+    """
+    conditions: list[dict[str, Any]] = [
+        {"field": "subject_type", "op": "eq", "value": subject_type},
+        {"field": "subject_id", "op": "eq", "value": subject_id},
+        {"field": "kind", "op": "eq", "value": kind},
+        {"field": "status", "op": "eq", "value": "executed"},
+    ]
+    if require_unexpired:
+        conditions.append({"or": [
+            {"field": "valid_until", "op": "is_null"},
+            {"field": "valid_until", "op": "gte", "value": date.today().isoformat()},
+        ]})
+    result = repository.list_records(
+        principal, "document", filters={"and": conditions}, limit=1,
+    )
+    return result["total"] > 0
+
+
 def _validate_commitment_closing(ctx: registry.ValidationContext) -> None:
     """The gate. Fires only on the transition INTO 'closed' -- a commitment
     that is already closed being edited for an unrelated reason (a note, a
@@ -303,23 +370,93 @@ def _validate_commitment_closing(ctx: registry.ValidationContext) -> None:
     if after_status != "closed" or before_status == "closed":
         return
 
-    result = repository.list_records(
-        ctx.principal, "document",
-        filters={
-            "and": [
-                {"field": "subject_type", "op": "eq", "value": "commitment"},
-                {"field": "subject_id", "op": "eq", "value": ctx.record_id},
-                {"field": "kind", "op": "eq", "value": SUBSCRIPTION_AGREEMENT_KIND},
-                {"field": "status", "op": "eq", "value": "executed"},
-            ]
-        },
-        limit=1,
-    )
-    if result["total"] == 0:
+    if not _current_document_exists(
+        ctx.principal, "commitment", ctx.record_id, SUBSCRIPTION_AGREEMENT_KIND
+    ):
         raise SubscriptionAgreementMissing(
             "this commitment cannot close: no executed subscription agreement "
             "is on file for it"
         )
+
+
+class AccountActivationBlocked(repository.ValidationError):
+    """Raised when an investment_account tries to reach 'active' without its
+    required AML/KYC and tax-withholding documents on file, executed and
+    unexpired."""
+
+
+def _account_activation_gate_enabled(org_id: str) -> bool:
+    """Strictness is a per-org `core.settings` key under the "compliance"
+    section, defaulting to enforcing -- destructive/consequential paths
+    default off, but a compliance GATE defaults ON (CLAUDE.md safety rule 9
+    is about defaulting a destructive action off; refusing to gate an
+    activation by default would be the same mistake in the other
+    direction)."""
+    values = core_settings.get_settings(org_id, "compliance")
+    return bool(values.get("enforce_account_activation_gate", True))
+
+
+def _required_document_kinds(
+    principal: permissions.Principal, account: dict[str, Any]
+) -> Optional[list[str]]:
+    """AML/KYC is always required. The tax-withholding form depends on the
+    account's tax country: the held person's `tax_residence_country` for a
+    person-held account, else the account's own `domicile_country` (an
+    entity is taxed on its own formation jurisdiction for the purpose of
+    picking a form, not looked through to its underlying owners).
+
+    Returns None -- "not determinable yet" -- when neither country is on
+    file, so the caller BLOCKS rather than silently requiring only AML/KYC:
+    a null category never satisfies a gate (CLAUDE.md safety rule 8).
+    """
+    tax_country = None
+    person_id = account.get("person_id")
+    if person_id:
+        person = repository.get_record(principal, "person", str(person_id))
+        tax_country = person.get("tax_residence_country") or None
+    if not tax_country:
+        tax_country = account.get("domicile_country") or None
+    if not tax_country:
+        return None
+
+    kinds = [AML_KYC_KIND]
+    if tax_country == "US":
+        kinds.append(W9_KIND)
+    else:
+        kinds.append(W8BENE_KIND if account.get("entity_org_id") else W8BEN_KIND)
+    return kinds
+
+
+def _validate_investment_account_activation(ctx: registry.ValidationContext) -> None:
+    """The gate. Fires on the transition INTO 'active' -- via `create` OR
+    `update` (see the module docstring for why this covers `create` too,
+    unlike `_validate_commitment_closing` above). An account already active
+    being edited for an unrelated reason does not recheck.
+    """
+    after = ctx.after
+    if not after or after.get("status") != "active":
+        return
+    if (ctx.before or {}).get("status") == "active":
+        return
+    if not _account_activation_gate_enabled(ctx.principal.org_id):
+        return
+
+    required = _required_document_kinds(ctx.principal, after)
+    if required is None:
+        raise AccountActivationBlocked(
+            "this account cannot activate: no tax residence or domicile "
+            "country on file to determine the required tax forms"
+        )
+
+    for kind in required:
+        if not _current_document_exists(
+            ctx.principal, "investment_account", ctx.record_id, kind,
+            require_unexpired=True,
+        ):
+            raise AccountActivationBlocked(
+                f"this account cannot activate: no executed, unexpired "
+                f"{kind!r} document is on file for it"
+            )
 
 
 def _seed_investor_categories(org_id: str) -> None:
@@ -547,6 +684,10 @@ def install() -> None:
     registry.register_validator(
         "commitment", _validate_commitment_closing,
         actions=("update",), module=MODULE,
+    )
+    registry.register_validator(
+        "investment_account", _validate_investment_account_activation,
+        actions=("create", "update"), module=MODULE,
     )
     registry.register_org_seed(_seed_investor_categories, module=MODULE)
     events.subscribe(

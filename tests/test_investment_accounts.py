@@ -43,10 +43,14 @@ class TestRegistration:
         fetched = repository.get_record(principal, "investment_account", str(account["id"]))
         assert fetched["account_type"] == "trust"
 
+        # 'onboarding', not 'active' -- reaching 'active' is gated by
+        # investor_portal's account-activation validator (Phase D), which
+        # is exercised on its own terms in tests/test_account_activation_gate.py.
+        # This test's job is only proving the generic update() path works.
         updated = repository.update(
-            principal, "investment_account", str(account["id"]), {"status": "active"}
+            principal, "investment_account", str(account["id"]), {"status": "onboarding"}
         )
-        assert updated["status"] == "active"
+        assert updated["status"] == "onboarding"
 
     def test_account_type_and_status_are_validated_by_the_generic_path(self, principal):
         with pytest.raises(repository.ValidationError):
