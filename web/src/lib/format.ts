@@ -19,6 +19,8 @@ export function formatValue(kind: FieldKind, value: unknown): string {
       return typeof value === 'number' ? value.toLocaleString() : String(value)
     case 'jsonb':
       return typeof value === 'string' ? value : JSON.stringify(value)
+    case 'multiselect':
+      return Array.isArray(value) ? value.join(', ') : String(value)
     default:
       return String(value)
   }

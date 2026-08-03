@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import type { FocusEvent, KeyboardEvent } from 'react'
 import type { FieldKind } from './types'
 
 interface FieldInputProps {
@@ -8,6 +10,18 @@ interface FieldInputProps {
   autoFocus?: boolean
   onBlur?: () => void
   onKeyDown?: (e: React.KeyboardEvent) => void
+}
+
+/** Whether an inline editor (RecordTable.saveCell, RecordDetail.saveField)
+ * should close itself right after a commit. True for every single-decision
+ * control (a select choice, a typed value on blur) -- false for multiselect,
+ * whose chip/tag picker expects to stay open across several toggles and
+ * closes only via its own container-blur (see MultiselectInput below). Kept
+ * next to FieldInput itself, which already owns "the one control per field
+ * kind," rather than duplicated as an inline `kind !== 'multiselect'` check
+ * at each call site. */
+export function shouldAutoCloseOnCommit(kind: FieldKind): boolean {
+  return kind !== 'multiselect'
 }
 
 /** The one control per field kind (R1/R5) -- used for inline table-cell
@@ -45,7 +59,22 @@ export function FieldInput({ kind, value, options, onChange, autoFocus, onBlur, 
     )
   }
 
-  if (kind === 'jsonb' || kind === 'multiselect') {
+  if (kind === 'multiselect') {
+    // A real picker, not a JSON textarea -- multiselect values are already
+    // plain arrays (the jsonb column round-trips as JSON, not a string), so
+    // there is nothing to parse/stringify here, unlike the jsonb case below.
+    return (
+      <MultiselectInput
+        value={Array.isArray(value) ? value.map(String) : []}
+        options={options}
+        onChange={onChange}
+        autoFocus={autoFocus}
+        onBlur={onBlur}
+      />
+    )
+  }
+
+  if (kind === 'jsonb') {
     return (
       <textarea
         value={typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2)}
@@ -88,5 +117,103 @@ export function FieldInput({ kind, value, options, onChange, autoFocus, onBlur, 
       onBlur={onBlur}
       onKeyDown={onKeyDown}
     />
+  )
+}
+
+interface MultiselectInputProps {
+  value: string[]
+  options: string[]
+  onChange: (value: unknown) => void
+  autoFocus?: boolean
+  onBlur?: () => void
+}
+
+/** Closed-vocabulary fields (options present -- e.g. investor_mandate's
+ * asset_classes/stages) render as toggleable chips; free-text multiselects
+ * (options empty -- e.g. sectors/geographies/esg_constraints) render as a
+ * tag input. Either way this replaces a raw JSON textarea, which was the
+ * only widget every multiselect field had before this.
+ *
+ * Fires onChange on every toggle/add/remove (matching every other
+ * FieldInput control, which commits per-change) but does NOT call onBlur
+ * itself -- the caller's onBlur only fires when focus truly leaves the
+ * whole widget, not after a single chip click, so a user can toggle
+ * several values before the editor closes. */
+function MultiselectInput({ value, options, onChange, autoFocus, onBlur }: MultiselectInputProps) {
+  const [draft, setDraft] = useState('')
+
+  function toggle(option: string) {
+    onChange(value.includes(option) ? value.filter((v) => v !== option) : [...value, option])
+  }
+
+  function removeTag(tag: string) {
+    onChange(value.filter((v) => v !== tag))
+  }
+
+  function addTag(raw: string) {
+    const tag = raw.trim()
+    if (!tag || value.includes(tag)) return
+    onChange([...value, tag])
+    setDraft('')
+  }
+
+  function handleContainerBlur(e: FocusEvent<HTMLDivElement>) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+      onBlur?.()
+    }
+  }
+
+  if (options.length > 0) {
+    return (
+      <div className="crm-multiselect" onBlur={handleContainerBlur}>
+        {options.map((o, i) => (
+          <button
+            key={o}
+            type="button"
+            className={
+              value.includes(o) ? 'crm-multiselect-chip crm-multiselect-chip-selected' : 'crm-multiselect-chip'
+            }
+            onClick={() => toggle(o)}
+            autoFocus={autoFocus && i === 0}
+          >
+            {o}
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="crm-multiselect" onBlur={handleContainerBlur}>
+      {value.map((tag) => (
+        <span key={tag} className="crm-multiselect-chip crm-multiselect-chip-selected">
+          {tag}
+          <button
+            type="button"
+            className="crm-multiselect-chip-remove"
+            onClick={() => removeTag(tag)}
+            aria-label={`Remove ${tag}`}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <input
+        className="crm-multiselect-taginput"
+        type="text"
+        value={draft}
+        placeholder="Add…"
+        autoFocus={autoFocus}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault()
+            addTag(draft)
+          } else if (e.key === 'Backspace' && draft === '' && value.length > 0) {
+            removeTag(value[value.length - 1])
+          }
+        }}
+      />
+    </div>
   )
 }

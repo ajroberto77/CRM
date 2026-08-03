@@ -295,7 +295,13 @@ button:disabled {
   background: var(--surface-sunken);
 }
 
-.crm-view-pill-active {
+.crm-view-pill-active,
+.crm-view-pill-active:hover {
+  /* :hover repeats the block rather than relying on cascade order because
+     the plain `button:hover` rule has higher specificity (0,1,1 vs 0,1,0)
+     and would otherwise repaint a hovered *active* pill back to the
+     unselected hover color, erasing the selection cue exactly while the
+     pointer is over it. */
   background: var(--tint-accent-bg);
   border-color: var(--tint-accent-border);
   color: var(--accent);
@@ -443,6 +449,7 @@ button:disabled {
 
 .crm-record-detail-fields {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -935,4 +942,61 @@ button:disabled {
   font-size: var(--fs-micro);
   text-transform: uppercase;
   letter-spacing: var(--tracking-wide);
+}
+
+/* ── Multiselect (chip toggle group / tag input) ─────────────────────── */
+
+.crm-multiselect {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 4px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface-base);
+}
+
+.crm-multiselect-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  /* Explicit, not inherited from the global `button` rule -- this class also
+     renders on a plain <span> for free-text tag chips (FieldInput.tsx),
+     which gets no border at all by default. Without this, `-selected`'s
+     border-color override below would have no border-style/width to act on
+     for the span case, and the tint-border pattern would silently vanish. */
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-size: var(--fs-small);
+  background: var(--surface-sunken);
+  overflow-wrap: anywhere;
+}
+
+.crm-multiselect-chip-selected,
+.crm-multiselect-chip-selected:hover {
+  background: var(--tint-accent-bg);
+  border-color: var(--tint-accent-border);
+  color: var(--accent);
+}
+
+.crm-multiselect-chip-remove {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin-left: 2px;
+  line-height: 1;
+  color: inherit;
+}
+
+.crm-multiselect-taginput {
+  border: none;
+  padding: 3px 4px;
+  flex: 1 1 80px;
+  min-width: 80px;
+}
+
+.crm-multiselect-taginput:focus {
+  outline: none;
 }

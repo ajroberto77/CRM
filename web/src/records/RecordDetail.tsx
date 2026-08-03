@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiDelete, apiGet, apiPatch, ApiError } from '../lib/api'
 import { formatValue } from '../lib/format'
-import { FieldInput } from './FieldInput'
+import { FieldInput, shouldAutoCloseOnCommit } from './FieldInput'
 import { LinkRecordControl } from './LinkRecordControl'
-import type { EntitySchema, RecordRow, RelatedBlocks } from './types'
+import type { EntitySchema, FieldKind, RecordRow, RelatedBlocks } from './types'
 
 /** Related records don't carry the target entity's schema, so this falls
  * back across the common label-ish fields rather than assuming `name`. */
@@ -53,7 +53,7 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
     }
   }, [entity, recordId, loadRelated])
 
-  async function saveField(name: string, value: unknown) {
+  async function saveField(name: string, value: unknown, kind: FieldKind) {
     if (!record) return
     const isCustom = schema.fields[name] === undefined
     const changes = isCustom ? { custom: { [name]: value } } : { [name]: value }
@@ -63,7 +63,9 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
     } catch (err) {
       window.alert(err instanceof ApiError ? err.detail : 'Failed to save')
     } finally {
-      setEditingField(null)
+      if (shouldAutoCloseOnCommit(kind)) {
+        setEditingField(null)
+      }
     }
   }
 
@@ -109,7 +111,7 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
                     value={value}
                     options={field.options}
                     autoFocus
-                    onChange={(v) => saveField(name, v)}
+                    onChange={(v) => saveField(name, v, field.kind)}
                     onBlur={() => setEditingField(null)}
                   />
                 ) : (
@@ -137,7 +139,7 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
                       value={value}
                       options={cf.options}
                       autoFocus
-                      onChange={(v) => saveField(cf.key, v)}
+                      onChange={(v) => saveField(cf.key, v, cf.kind)}
                       onBlur={() => setEditingField(null)}
                     />
                   ) : (

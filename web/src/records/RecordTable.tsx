@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { apiPatch, apiPost, ApiError } from '../lib/api'
 import { formatValue } from '../lib/format'
-import { FieldInput } from './FieldInput'
+import { FieldInput, shouldAutoCloseOnCommit } from './FieldInput'
 import { useRecordList } from './useRecordList'
 import type { EntitySchema, FilterNode, RecordRow, SortSpec } from './types'
 
@@ -54,7 +54,9 @@ export function RecordTable({ entity, schema, filters, sort, columns, onOpenReco
       window.alert(err instanceof ApiError ? err.detail : 'Failed to save')
     } finally {
       setSavingCell(false)
-      setEditingCell(null)
+      if (shouldAutoCloseOnCommit(fieldSchemaFor(field).kind)) {
+        setEditingCell(null)
+      }
     }
   }
 
