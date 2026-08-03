@@ -280,6 +280,11 @@ TABLES: dict[str, dict[str, str]] = {
             "CHECK (source IN ('human','derived','import','sync','ai'))"
         ),
         "is_derived": "boolean NOT NULL DEFAULT false",
+        # ISO-3166-1 alpha-2 (server/core/identity.py's normalize_country),
+        # formation jurisdiction -- distinct from a person's tax residence or
+        # citizenship below, and from an investment_account's own domicile
+        # (Phase B), which can legitimately differ from its parent entity's.
+        "domicile_country": "text NOT NULL DEFAULT ''",
         "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
         "created_at": _CREATED,
         "updated_at": _CREATED,
@@ -307,6 +312,13 @@ TABLES: dict[str, dict[str, str]] = {
         # never inferred (safety rule 9: destructive/consequential paths
         # default off).
         "auto_accept": "boolean NOT NULL DEFAULT false",
+        # ISO-3166-1 alpha-2, two genuinely different facts that happen to
+        # share a representation: where this person pays tax (drives which
+        # W-8/W-9 variant Phase D requires) vs. their nationality. A US
+        # citizen resident abroad, or a non-US citizen resident in the US,
+        # needs both tracked separately -- neither implies the other.
+        "tax_residence_country": "text NOT NULL DEFAULT ''",
+        "citizenship_country": "text NOT NULL DEFAULT ''",
         "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
         "created_at": _CREATED,
         "updated_at": _CREATED,

@@ -36,7 +36,7 @@ import uuid
 from datetime import date
 from typing import Any, Iterable, Optional
 
-from server.core import permissions, registry, repository
+from server.core import hierarchy, permissions, registry, repository
 from server.core.permissions import Principal
 from server.core.registry import UnknownField
 from server.db import pool
@@ -124,6 +124,8 @@ def associate(
         raise AssociationError("valid_to precedes valid_from")
 
     with pool.transaction(org_id=principal.org_id, user_id=principal.user_id) as cur:
+        if role_spec.hierarchical:
+            _check_no_cycle(cur, principal.org_id, role, from_type, from_id, to_type, to_id)
         cur.execute(
             "INSERT INTO core.associations "
             "  (id, org_id, from_type, from_id, to_type, to_id, role, attributes, "
@@ -151,6 +153,34 @@ def associate(
             )
             row = cur.fetchone()
         return dict(row)
+
+
+def _check_no_cycle(
+    cur: Any, org_id: str, role: str,
+    from_type: str, from_id: str, to_type: str, to_id: str,
+) -> None:
+    """Reject a hierarchical edge that would close a cycle.
+
+    Child = `from_id`, parent = `to_id` (the convention `hierarchy.py` walks
+    by). A self-loop is the trivial one-node cycle; anything longer is caught
+    by walking UP from the new parent (`to_id`) and checking whether the new
+    child (`from_id`) is already among its ancestors -- if it is, `to_id` is
+    already a descendant of `from_id`, and adding this edge would close the
+    loop.
+
+    Runs on the SAME cursor already open in `associate()`'s transaction, not
+    a nested `pool.transaction()` -- exactly why `hierarchy.ancestor_type_ids()`
+    exists as a raw, cursor-taking primitive separate from the permission-
+    checking `hierarchy.ancestors_of()` wrapper.
+    """
+    if from_type == to_type and from_id == to_id:
+        raise AssociationError(f"{role}: cannot link a record to itself")
+    ancestors = hierarchy.ancestor_type_ids(cur, org_id, role, to_type, to_id, hierarchy.MAX_DEPTH)
+    if any(a["entity_type"] == from_type and str(a["entity_id"]) == from_id for a in ancestors):
+        raise AssociationError(
+            f"{role}: linking would create a cycle -- {to_type} {to_id} is "
+            f"already a descendant of {from_type} {from_id}"
+        )
 
 
 def dissociate(principal: Principal, association_id: str) -> bool:

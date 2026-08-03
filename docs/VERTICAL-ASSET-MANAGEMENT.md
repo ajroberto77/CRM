@@ -69,7 +69,7 @@ validated on write. Free text drifts (`works_at` / `works at` / `employee_of`)
 and silently stops matching, the same failure Cal hit with event categories.
 
 Core roles: `works_at`, `board_member_of`, `advisor_to`, `introduced_by`,
-`owns`, `vendor_to`.
+`owned_by`, `vendor_to`.
 The `funds` module adds: `lp_in`, `gp_of`, `portfolio_of`, `co_investor_in`,
 `lender_to`, `acquirer_of`.
 

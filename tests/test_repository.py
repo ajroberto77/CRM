@@ -163,6 +163,29 @@ class TestCrud:
                 principal, "person", {"full_name": "X", "primary_email": "nope"}
             )
 
+    def test_country_columns_normalize_through_the_one_normalizer(self, principal):
+        org = repository.create(
+            principal, "organization", {"name": "Acme", "domicile_country": "gb"}
+        )
+        assert org["domicile_country"] == "GB"
+
+        person = repository.create(
+            principal, "person",
+            {"full_name": "X", "tax_residence_country": "us", "citizenship_country": " ca "},
+        )
+        assert person["tax_residence_country"] == "US"
+        assert person["citizenship_country"] == "CA"
+
+    def test_invalid_country_code_is_refused(self, principal):
+        with pytest.raises(repository.ValidationError):
+            repository.create(
+                principal, "organization", {"name": "Acme", "domicile_country": "USA"}
+            )
+        with pytest.raises(repository.ValidationError):
+            repository.create(
+                principal, "person", {"full_name": "X", "tax_residence_country": "Nowhere"}
+            )
+
     @pytest.mark.parametrize(
         "values",
         [

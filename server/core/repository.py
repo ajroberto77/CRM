@@ -637,8 +637,10 @@ def _derive_normalized(entity: str, columns: dict[str, Any]) -> None:
     core/identity.py rather than inlining a .lower().strip() (R5)."""
     from server.core import identity
 
-    if entity == "organization" and "name" in columns:
-        columns["name_normalized"] = identity.normalize_name(columns["name"]) or ""
+    if entity == "organization":
+        if "name" in columns:
+            columns["name_normalized"] = identity.normalize_name(columns["name"]) or ""
+        _normalize_country_column(columns, "domicile_country")
     if entity == "person":
         if "full_name" in columns:
             columns["name_normalized"] = identity.normalize_name(columns["full_name"]) or ""
@@ -649,6 +651,22 @@ def _derive_normalized(entity: str, columns: dict[str, Any]) -> None:
                     f"{columns['primary_email']!r} is not a valid email address"
                 )
             columns["primary_email"] = normalized
+        _normalize_country_column(columns, "tax_residence_country")
+        _normalize_country_column(columns, "citizenship_country")
+
+
+def _normalize_country_column(columns: dict[str, Any], column: str) -> None:
+    """Shared by every ISO-3166-1 country column (`domicile_country`,
+    `tax_residence_country`, `citizenship_country`) so the validate-and-
+    overwrite-in-place shape lives once, matching `primary_email` above."""
+    from server.core import identity
+
+    if column not in columns or not columns[column]:
+        return
+    normalized = identity.normalize_country(columns[column])
+    if normalized is None:
+        raise ValidationError(f"{columns[column]!r} is not a valid ISO-3166-1 country code")
+    columns[column] = normalized
 
 
 def _event(

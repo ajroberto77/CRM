@@ -146,12 +146,19 @@ class AssociationRole:
     `symmetric` roles are canonicalized on write (endpoints sorted) so `A co_
     investor_in B` and `B co_investor_in A` cannot both exist -- otherwise the
     uniqueness index never fires and the relationship is double-counted.
+
+    `hierarchical` roles form a rollup dimension (child = `from_id`, parent =
+    `to_id`) walked by `server/core/hierarchy.py`'s recursive CTE and guarded
+    against cycles by `associations.associate()` at write time -- see that
+    module's docstring for why both the cycle check and its depth cap ship
+    together.
     """
     name: str
     from_types: tuple[str, ...]
     to_types: tuple[str, ...]
     inverse_label: str = ""
     symmetric: bool = False
+    hierarchical: bool = False
     module: str = "core"
 
 
@@ -538,6 +545,8 @@ def register_core_entities() -> None:
                                 options=("human", "derived", "import", "sync", "ai")),
             "is_derived": FieldSpec("is_derived", "boolean", column="is_derived",
                                     writable=False),
+            "domicile_country": FieldSpec("domicile_country", "text",
+                                          column="domicile_country"),
         }),
     ))
 
@@ -554,6 +563,10 @@ def register_core_entities() -> None:
             "is_derived": FieldSpec("is_derived", "boolean", column="is_derived",
                                     writable=False),
             "auto_accept": FieldSpec("auto_accept", "boolean", column="auto_accept"),
+            "tax_residence_country": FieldSpec("tax_residence_country", "text",
+                                               column="tax_residence_country"),
+            "citizenship_country": FieldSpec("citizenship_country", "text",
+                                             column="citizenship_country"),
         }),
     ))
 
@@ -828,6 +841,19 @@ def _register_core_roles() -> None:
         "introduced_by", ("person", "organization"), ("person",),
         inverse_label="introductions"))
     register_role(AssociationRole(
-        "owns", ("organization", "person"), ("organization",), inverse_label="owned by"))
-    register_role(AssociationRole(
         "vendor_to", ("organization",), ("organization",), inverse_label="vendors"))
+    # Legal/corporate ownership -- the Ultimate Parent Company hierarchy.
+    # `from` is the owned org (the child), `to` is the owner (an org or a
+    # person -- a GP with no corporate parent is routinely owned directly by
+    # a person), matching `hierarchy.py`'s child-to-parent convention and the
+    # same from=subordinate/to=container direction `lp_in`/`portfolio_of`
+    # already use. `owned_by` reads correctly from the child's own record;
+    # `inverse_label="owns"` is what the owner's page shows. Deliberately
+    # domain-neutral (every CRM wants "who owns whom") -- unlike
+    # `modules/funds`' `rolls_up_to`, which is an investment-relationship
+    # rollup that is explicitly NOT legal-entity-based. Same traversal
+    # mechanism (server/core/hierarchy.py), two different real-world
+    # concepts, hence two roles.
+    register_role(AssociationRole(
+        "owned_by", ("organization",), ("organization", "person"),
+        inverse_label="owns", hierarchical=True))

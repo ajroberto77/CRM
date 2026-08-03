@@ -106,3 +106,18 @@ class TestDispatch:
 def test_name_normalization_collapses_whitespace_and_case():
     assert identity.normalize_name("  Bob   Smith ") == "bob smith"
     assert identity.normalize_name("BOB SMITH") == identity.normalize_name("bob smith")
+
+
+class TestCountry:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [("us", "US"), (" gb ", "GB"), ("De", "DE"), ("JP", "JP")],
+    )
+    def test_normalizes(self, raw, expected):
+        assert identity.normalize_country(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["", None, "USA", "United States", "Freedonia", "XX"])
+    def test_rejects(self, raw):
+        """Alpha-3 codes and full names are deliberately not accepted -- one
+        canonical form, not a second one that has to be kept in sync."""
+        assert identity.normalize_country(raw) is None
