@@ -17,7 +17,10 @@ import type { FilterNode, SavedView } from './types'
  * schema (wrong default_sort field, wrong columns) before the effect catches
  * up. A remount makes that render impossible rather than racing it. */
 function EntityListPageForEntity() {
-  const { entity = '', recordId } = useParams<{ entity: string; recordId?: string }>()
+  const { entity: entityParam = '', recordId } = useParams<{ entity: string; recordId?: string }>()
+  // Normalize entity name: convert kebab-case (from URL) to snake_case (entity name).
+  // URLs use kebab-case by convention, but entity names use snake_case.
+  const entity = entityParam.replace(/-/g, '_')
   const navigate = useNavigate()
   const { schema, loading, error } = useEntitySchema(entity)
   const { views, canUseViews, saveView, deleteView } = useSavedViews(entity)

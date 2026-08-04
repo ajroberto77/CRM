@@ -39,15 +39,51 @@ export function useEntitySchema(entity: string | undefined): SchemaState {
   return { schema, loading, error }
 }
 
-export function useEntityList(): { entities: EntitySummary[]; loading: boolean } {
+// Module-level cache for entity list, keyed by org context at runtime
+// (no cache key needed: one org per session). Retries on network failure
+// instead of permanently latching a stale/unresolved state (safety rule 5).
+let entityListCache: { entities: EntitySummary[] } | null = null
+let entityListPromise: Promise<{ entities: EntitySummary[] }> | null = null
+
+export function useEntityList(): { entities: EntitySummary[]; loading: boolean; error: string | null } {
   const [entities, setEntities] = useState<EntitySummary[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!entityListCache)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    apiGet<{ entities: EntitySummary[] }>('/records')
-      .then((r) => setEntities(r.entities))
-      .finally(() => setLoading(false))
+    if (entityListCache) {
+      setEntities(entityListCache.entities)
+      return
+    }
+
+    let cancelled = false
+
+    const load = async () => {
+      try {
+        if (!entityListPromise) {
+          entityListPromise = apiGet<{ entities: EntitySummary[] }>('/records')
+        }
+        const result = await entityListPromise
+        if (!cancelled) {
+          entityListCache = result
+          setEntities(result.entities)
+          setError(null)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          entityListPromise = null
+          setError(err instanceof Error ? err.message : String(err))
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    load()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  return { entities, loading }
+  return { entities, loading, error }
 }

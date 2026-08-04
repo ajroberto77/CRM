@@ -16,9 +16,31 @@ const SETTINGS_PATH_PREFIX = '/admin/settings'
 
 export function Shell() {
   const { user, org, logout } = useAuth()
-  const { entities } = useEntityList()
+  const { entities, error: entitiesError } = useEntityList()
   const location = useLocation()
   const inSettings = location.pathname.startsWith(SETTINGS_PATH_PREFIX)
+
+  // Filter to primary nav entities and group by nav_group, sorted by nav_order
+  const primaryEntities = entities
+    .filter((e) => e.nav === 'primary')
+    .sort((a, b) => {
+      // Sort first by nav_group (empty group first), then by nav_order
+      const groupA = a.nav_group || ''
+      const groupB = b.nav_group || ''
+      if (groupA !== groupB) return groupA.localeCompare(groupB)
+      return a.nav_order - b.nav_order
+    })
+
+  // Group entities by nav_group
+  const groups: Record<string, typeof entities> = {}
+  for (const entity of primaryEntities) {
+    const group = entity.nav_group || ''
+    if (!groups[group]) groups[group] = []
+    groups[group].push(entity)
+  }
+
+  // Ordered list of unique groups as they appear in the sorted entities
+  const groupKeys = Array.from(new Set(primaryEntities.map((e) => e.nav_group || '')))
 
   return (
     <div className="crm-shell">
@@ -51,19 +73,18 @@ export function Shell() {
             <NavLink to="/review/proposals" className={sidebarLinkClass}>
               Pending Proposals
             </NavLink>
-            <div className="crm-sidebar-divider" />
-            {entities
-              // proposed_change already has its own dedicated "Pending
-              // Proposals" entry above (server/core/proposals.py's approval
-              // queue, with a real approve/decline UI) -- the generic
-              // registry-driven list view is not that flow, so don't show
-              // both.
-              .filter((e) => e.name !== 'proposed_change')
-              .map((e) => (
-                <NavLink key={e.name} to={`/e/${e.name}`} className={sidebarLinkClass}>
-                  {e.label}
-                </NavLink>
-              ))}
+            {groupKeys.length > 0 && <div className="crm-sidebar-divider" />}
+            {entitiesError && <div className="crm-sidebar-error">Failed to load navigation</div>}
+            {groupKeys.map((groupKey) => (
+              <div key={groupKey || 'default'}>
+                {groupKey && <div className="crm-sidebar-section">{groupKey}</div>}
+                {groups[groupKey].map((e) => (
+                  <NavLink key={e.name} to={`/e/${e.name}`} className={sidebarLinkClass}>
+                    {e.label}
+                  </NavLink>
+                ))}
+              </div>
+            ))}
           </nav>
         )}
         <main className="crm-content">

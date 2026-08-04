@@ -6,6 +6,7 @@ import { Shell } from './Shell'
 import { HomePage } from './HomePage'
 import { EntityListPage } from '../records/EntityListPage'
 import { SettingsShell } from '../settings/SettingsShell'
+import { SettingsEntityListPage } from '../settings/SettingsEntityListPage'
 import { LlmSettingsPage } from '../settings/LlmSettingsPage'
 import { ConnectedAccountsPage } from '../settings/ConnectedAccountsPage'
 import { ConnectedChannelsPage } from '../settings/ConnectedChannelsPage'
@@ -40,6 +41,10 @@ export function App() {
           <Route path="llm" element={<LlmSettingsPage />} />
           <Route path="connected-accounts" element={<ConnectedAccountsPage />} />
           <Route path="connected-channels" element={<ConnectedChannelsPage />} />
+          {/* Dynamic entity settings pages -- entities have kebab-case routes but
+              snake_case names (e.g., /trusted-sender routes to trusted_sender entity).
+              SettingsEntityListPage passes through to EntityListPage, which normalizes. */}
+          <Route path=":entity" element={<SettingsEntityListPage />} />
         </Route>
         {/* Not "/proposals/*" -- that prefix is proxied straight to the
             backend API (vite.config.ts), so a page reload here would hit

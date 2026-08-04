@@ -265,6 +265,21 @@ button:disabled {
   flex-shrink: 0;
 }
 
+.crm-sidebar-section {
+  font-size: var(--fs-tiny);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--text-muted);
+  padding: 12px 10px 4px;
+  margin-top: 4px;
+}
+
+.crm-sidebar-error {
+  font-size: var(--fs-small);
+  color: var(--status-error);
+  padding: 8px 10px;
+}
+
 .crm-content {
   flex: 1;
   min-width: 0;

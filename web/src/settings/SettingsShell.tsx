@@ -1,10 +1,16 @@
 import { Link, NavLink, Outlet } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
+import { useEntityList } from '../records/useEntitySchema'
 import { navLinkClass } from '../lib/navLinkClass'
 
 // Reuses .crm-sidebar-link/-active -- same nav-link recipe as the main
 // sidebar, no reason to fork a second copy of the same rule set.
 const subNavLinkClass = navLinkClass('crm-sidebar-link')
+
+// Map entity name to kebab-case route segment for URLs
+function pathFromEntityName(name: string): string {
+  return name.replace(/_/g, '-')
+}
 
 /** The single Settings entry point (Shell.tsx's titlebar gear icon) opens
  * this -- one full page taking over the whole content area (Shell.tsx
@@ -15,6 +21,12 @@ const subNavLinkClass = navLinkClass('crm-sidebar-link')
  * beside the still-visible entity sidebar. */
 export function SettingsShell() {
   const { user } = useAuth()
+  const { entities } = useEntityList()
+
+  // Filter to nav="settings" entities and sort by label
+  const settingsEntities = entities
+    .filter((e) => e.nav === 'settings')
+    .sort((a, b) => a.label.localeCompare(b.label))
 
   return (
     <div className="crm-settings-shell">
@@ -37,6 +49,16 @@ export function SettingsShell() {
           <NavLink to="/admin/settings/connected-channels" className={subNavLinkClass}>
             Connected Channels
           </NavLink>
+          {settingsEntities.length > 0 && <div className="crm-sidebar-divider" />}
+          {settingsEntities.map((entity) => (
+            <NavLink
+              key={entity.name}
+              to={`/admin/settings/${pathFromEntityName(entity.name)}`}
+              className={subNavLinkClass}
+            >
+              {entity.label}
+            </NavLink>
+          ))}
         </nav>
         <div className="crm-settings-shell-content">
           <Outlet />
