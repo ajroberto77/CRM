@@ -2,7 +2,7 @@
   "name": "crm",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n backend,frontend -c blue,green \"uvicorn server.api.app:app --reload --port 8500\" \"npm --prefix web run dev\"",
+    "dev": "concurrently -n backend,frontend -c blue,green \"uvicorn server.api.app:app --reload --port 8500\" \"wait-on tcp:8500 && npm --prefix web run dev\"",
     "dev:backend": "uvicorn server.api.app:app --reload --port 8500",
     "dev:frontend": "npm --prefix web run dev",
     "build": "npm --prefix web run build",
@@ -10,6 +10,7 @@
     "preview": "npm --prefix web run preview"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "wait-on": "^8.0.1"
   }
 }
