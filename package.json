@@ -2,8 +2,8 @@
   "name": "crm",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n backend,frontend -c blue,green \"uvicorn server.api.app:app --reload\" \"npm --prefix web run dev\"",
-    "dev:backend": "uvicorn server.api.app:app --reload",
+    "dev": "concurrently -n backend,frontend -c blue,green \"uvicorn server.api.app:app --reload --port 8500\" \"npm --prefix web run dev\"",
+    "dev:backend": "uvicorn server.api.app:app --reload --port 8500",
     "dev:frontend": "npm --prefix web run dev",
     "build": "npm --prefix web run build",
     "lint": "npm --prefix web run lint",
