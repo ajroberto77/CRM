@@ -835,17 +835,65 @@ button:disabled {
   padding: 0 var(--content-pad);
 }
 
-.crm-record-page-center h3 {
-  font-size: var(--fs-small);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-  color: var(--text-muted);
-  margin: 0 0 10px;
+.crm-record-page-center-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
 }
 
 .crm-record-page-right {
   flex: 1 1 280px;
   min-width: 0;
+}
+
+.crm-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.crm-timeline-entry {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.crm-timeline-entry:last-child {
+  border-bottom: none;
+}
+
+.crm-timeline-icon {
+  flex-shrink: 0;
+  color: var(--text-subtle);
+  /* Matches .crm-view-pill-board-icon's normalization -- emoji glyphs render
+     at inconsistent visual weights/sizes across fonts, so a five-symbol ad
+     hoc icon set (unlike that one's single "▦") needs it even more. */
+  font-size: var(--fs-tiny);
+  opacity: 0.7;
+}
+
+.crm-timeline-body {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.crm-timeline-body .crm-reference-link {
+  /* Same guard .crm-related-item .crm-reference-link needs -- a flex item
+     defaults to min-width:auto and won't shrink below its own text's
+     min-content width, so a long unbroken label (an interaction subject, a
+     note's body-derived title) can overflow the row instead of wrapping. */
+  overflow-wrap: anywhere;
+}
+
+.crm-timeline-time {
+  font-size: var(--fs-tiny);
+  color: var(--text-subtle);
+  flex-shrink: 0;
 }
 
 .crm-children-panel {

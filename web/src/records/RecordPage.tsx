@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ChildrenPanel } from './ChildrenPanel'
 import { HierarchyChain } from './HierarchyChain'
 import { LinkRecordControl } from './LinkRecordControl'
 import { RecordFieldList } from './RecordFieldList'
 import { RelatedPanel } from './RelatedPanel'
+import { Timeline } from './Timeline'
 import { useEntitySchema } from './useEntitySchema'
 import { useRecordDetail } from './useRecordDetail'
 import type { EntitySchema } from './types'
@@ -39,6 +41,7 @@ function RecordPageBody({
     record, related, error, ready, hierarchicalRoles, loadRelated,
     saveField, savingField, editingField, setEditingField, labelFor, confirmAndDelete,
   } = useRecordDetail(entity, recordId, schema)
+  const [centerTab, setCenterTab] = useState<'timeline' | 'records'>('timeline')
 
   if (error) return <div className="crm-table-status crm-table-status-error">{error}</div>
   if (!ready || !record) return <div className="crm-table-status">Loading…</div>
@@ -78,8 +81,25 @@ function RecordPageBody({
         </div>
 
         <div className="crm-record-page-center">
-          <h3>Records</h3>
-          <ChildrenPanel entity={entity} recordId={recordId} />
+          <div className="crm-record-page-center-tabs">
+            <button
+              className={centerTab === 'timeline' ? 'crm-view-pill crm-view-pill-active' : 'crm-view-pill'}
+              onClick={() => setCenterTab('timeline')}
+            >
+              Timeline
+            </button>
+            <button
+              className={centerTab === 'records' ? 'crm-view-pill crm-view-pill-active' : 'crm-view-pill'}
+              onClick={() => setCenterTab('records')}
+            >
+              Records
+            </button>
+          </div>
+          {centerTab === 'timeline' ? (
+            <Timeline entity={entity} recordId={recordId} />
+          ) : (
+            <ChildrenPanel entity={entity} recordId={recordId} />
+          )}
         </div>
 
         <div className="crm-record-page-right">

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from server.core import identity, permissions, repository, users
+from server.core import identity, interactions, permissions, repository, timeline, users
 
 
 @pytest.fixture
@@ -167,6 +167,120 @@ class TestDerivation:
         )
         after = repository.list_records(principal, "person")["total"]
         assert after == before  # resolved to Jane, no new person
+
+
+class TestInteractionParticipants:
+    """Phase 8: `_derive_contacts` now records who was actually on an
+    interaction, not just resolving-then-discarding a person per channel."""
+
+    def test_from_and_to_channels_are_recorded_with_the_right_role(self, principal):
+        created = repository.create(
+            principal, "interaction",
+            {"kind": "email", "direction": "inbound", "from_channel": "sender@example.com",
+             "to_channels": ["recipient@example.com"]},
+        )
+        rows = interactions.list_participants(principal, str(created["id"]))
+        by_role = {r["role"]: r for r in rows}
+        assert set(by_role) == {"from", "to"}
+
+        sender = repository.list_records(
+            principal, "contact_channel",
+            filters={"field": "value_normalized", "op": "eq", "value": "sender@example.com"},
+        )["records"][0]
+        assert by_role["from"]["person_id"] == sender["person_id"]
+
+    def test_reprocessing_the_same_interaction_does_not_duplicate_participants(self, principal):
+        """`add_participant`'s own uniqueness (org_id, interaction_id,
+        person_id, role) must hold even though nothing in this test calls
+        it twice directly -- two DIFFERENT interactions from the same
+        sender must each get their own participant row, not collide."""
+        repository.create(
+            principal, "interaction",
+            {"kind": "email", "direction": "inbound", "from_channel": "repeat@example.com"},
+        )
+        second = repository.create(
+            principal, "interaction",
+            {"kind": "email", "direction": "inbound", "from_channel": "repeat@example.com"},
+        )
+        rows = interactions.list_participants(principal, str(second["id"]))
+        assert len(rows) == 1
+
+    def test_interactions_for_person_returns_every_interaction_they_were_on(self, principal):
+        first = repository.create(
+            principal, "interaction",
+            {"kind": "email", "direction": "inbound", "from_channel": "multi@example.com",
+             "occurred_at": "2026-01-01T00:00:00Z"},
+        )
+        second = repository.create(
+            principal, "interaction",
+            {"kind": "email", "direction": "outbound", "to_channels": ["multi@example.com"],
+             "occurred_at": "2026-06-01T00:00:00Z"},
+        )
+        person = repository.list_records(
+            principal, "contact_channel",
+            filters={"field": "value_normalized", "op": "eq", "value": "multi@example.com"},
+        )["records"][0]["person_id"]
+
+        rows = interactions.interactions_for_person(principal, str(person))
+        assert [str(r["id"]) for r in rows] == [str(second["id"]), str(first["id"])]
+
+    def test_a_meeting_records_no_participants(self, principal):
+        """No unambiguous channel-kind mapping for 'meeting' -- see
+        server/core/derivation.py. Consistent with deriving no person at
+        all for the same reason."""
+        created = repository.create(
+            principal, "interaction",
+            {"kind": "meeting", "direction": "internal", "from_channel": "someone@example.com"},
+        )
+        assert interactions.list_participants(principal, str(created["id"])) == []
+
+    def test_a_bad_role_is_rejected(self, principal):
+        person = repository.create(principal, "person", {"full_name": "X"})
+        created = repository.create(principal, "interaction", {"kind": "email"})
+        with pytest.raises(ValueError):
+            interactions.add_participant(
+                principal, str(created["id"]), person_id=str(person["id"]), role="cc",
+            )
+
+
+class TestTimeline:
+    """`timeline.timeline_for()` -- children (notes/tasks/documents) plus,
+    for a person, their interactions, merged newest-first."""
+
+    def test_merges_interactions_and_notes_for_a_person(self, principal):
+        repository.create(
+            principal, "interaction",
+            {"kind": "email", "direction": "inbound", "from_channel": "merge@example.com",
+             "occurred_at": "2026-03-01T00:00:00Z"},
+        )
+        person_id = repository.list_records(
+            principal, "contact_channel",
+            filters={"field": "value_normalized", "op": "eq", "value": "merge@example.com"},
+        )["records"][0]["person_id"]
+        repository.create(
+            principal, "note",
+            {"body": "Called to follow up", "subject_type": "person", "subject_id": person_id},
+        )
+
+        entries = timeline.timeline_for(principal, "person", str(person_id))
+        kinds = {e["entity"] for e in entries}
+        # "contact_channel" is genuinely a child too -- children_of() finds
+        # it the same generic way it finds "note" (a real FieldSpec.references
+        # to person), and the derivation above created one deriving this
+        # person from the email address in the first place.
+        assert kinds == {"interaction", "note", "contact_channel"}
+
+    def test_a_non_person_entity_gets_children_only_no_interactions(self, principal):
+        org = repository.create(principal, "organization", {"name": "Acme"})
+        repository.create(
+            principal, "task", {"title": "Follow up", "subject_type": "organization", "subject_id": str(org["id"])},
+        )
+        entries = timeline.timeline_for(principal, "organization", str(org["id"]))
+        assert {e["entity"] for e in entries} == {"task"}
+
+    def test_empty_timeline_is_an_empty_list(self, principal):
+        person = repository.create(principal, "person", {"full_name": "Lonely"})
+        assert timeline.timeline_for(principal, "person", str(person["id"])) == []
 
 
 class TestPromotion:

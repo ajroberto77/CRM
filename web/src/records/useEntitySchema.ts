@@ -8,29 +8,60 @@ interface SchemaState {
   error: string | null
 }
 
+// Module-level cache, keyed by entity name -- a schema is registry
+// metadata, not per-record data, so it's safe to share across every
+// component that asks for the same entity in one session rather than each
+// independently re-fetching it. Mirrors `useEntityList`'s own cache+in-
+// flight-promise-dedupe pattern below; the first duplicate-fetch caller
+// this actually mattered for was `Timeline.tsx` (Phase 8), which renders
+// one row per activity-feed entry and would otherwise fire one
+// `/records/{entity}/schema` request per entry sharing the same entity
+// type instead of one per distinct type.
+const schemaCache: Record<string, EntitySchema> = {}
+const schemaPromises: Record<string, Promise<EntitySchema>> = {}
+
 /** Fetches GET /records/{entity}/schema -- the single source every
  * table/form/filter builds from, so a new entity or custom field needs no
  * frontend change to appear (R4). */
 export function useEntitySchema(entity: string | undefined): SchemaState {
-  const [schema, setSchema] = useState<EntitySchema | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [schema, setSchema] = useState<EntitySchema | null>(entity ? (schemaCache[entity] ?? null) : null)
+  const [loading, setLoading] = useState(!(entity && schemaCache[entity]))
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!entity) return
+    if (schemaCache[entity]) {
+      setSchema(schemaCache[entity])
+      setLoading(false)
+      return
+    }
+
     let cancelled = false
     setLoading(true)
     setError(null)
-    apiGet<EntitySchema>(`/records/${entity}/schema`)
-      .then((s) => {
-        if (!cancelled) setSchema(s)
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
-      })
-      .finally(() => {
+
+    const load = async () => {
+      try {
+        if (!schemaPromises[entity]) {
+          schemaPromises[entity] = apiGet<EntitySchema>(`/records/${entity}/schema`)
+        }
+        const result = await schemaPromises[entity]
+        if (!cancelled) {
+          schemaCache[entity] = result
+          setSchema(result)
+          setError(null)
+        }
+      } catch (err) {
+        if (!cancelled) {
+          delete schemaPromises[entity]
+          setError(err instanceof Error ? err.message : String(err))
+        }
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    }
+
+    load()
     return () => {
       cancelled = true
     }

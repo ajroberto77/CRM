@@ -14,6 +14,12 @@ through exactly these routes, parameterized by `{entity}`:
     PATCH  /records/{entity}/{id}            update
     DELETE /records/{entity}/{id}             delete
     GET    /records/{entity}/{id}/related    associations, grouped and hydrated
+    GET    /records/{entity}/{id}/hierarchy  the ancestor/descendant chain for one
+                                              hierarchical association role
+    GET    /records/{entity}/{id}/children   records naming this one as their
+                                              parent through a real FK field
+    GET    /records/{entity}/{id}/timeline   children + (for a person) interactions,
+                                              merged and sorted newest-first
 
     POST   /associations                     create a relationship
     POST   /associations/{id}/end            end one (dated, preserved)
@@ -40,7 +46,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from server.api.auth import current_principal
-from server.core import associations, permissions, query, registry, repository
+from server.core import associations, permissions, query, registry, repository, timeline
 from server.core.permissions import Principal
 
 router = APIRouter(prefix="/records", tags=["records"])
@@ -344,6 +350,23 @@ def record_children(
     registry.entity(entity)  # UnknownEntity -> 404 via the app handler
     blocks = repository.children_of(principal, entity, record_id)
     return {"children": blocks}
+
+
+@router.get("/{entity}/{record_id}/timeline")
+def record_timeline(
+    entity: str, record_id: str,
+    limit: Optional[int] = Query(default=None),
+    principal: Principal = Depends(current_principal),
+) -> dict[str, Any]:
+    """The merged, chronological activity feed -- `/children`'s notes/
+    tasks/documents plus, for a person, every interaction they
+    participated in (Phase 8's `interaction_participants`), sorted
+    newest-first. Wraps `timeline.timeline_for()`."""
+    registry.entity(entity)  # UnknownEntity -> 404 via the app handler
+    entries = timeline.timeline_for(
+        principal, entity, record_id, limit=query.clamp_limit(limit),
+    )
+    return {"entries": entries}
 
 
 # ── Write ────────────────────────────────────────────────────────────────────

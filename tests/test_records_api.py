@@ -306,6 +306,43 @@ class TestChildren:
         assert response.status_code == 401
 
 
+class TestTimeline:
+    def test_merges_interactions_and_children_for_a_person(self, client, org_id, admin):
+        _login(client)
+        client.post(
+            "/records/interaction",
+            json={"kind": "email", "direction": "inbound", "from_channel": "person@example.com"},
+        )
+        person_id = client.get(
+            "/records/contact_channel",
+            params={"filter": '{"field":"value_normalized","op":"eq","value":"person@example.com"}'},
+        ).json()["records"][0]["person_id"]
+        client.post(
+            "/records/task",
+            json={"title": "Follow up", "subject_type": "person", "subject_id": person_id},
+        )
+
+        response = client.get(f"/records/person/{person_id}/timeline")
+        assert response.status_code == 200
+        kinds = {e["entity"] for e in response.json()["entries"]}
+        # "contact_channel" is a genuine child too (a real FieldSpec.references
+        # to person), created by the derivation the interaction above triggered.
+        assert kinds == {"interaction", "task", "contact_channel"}
+
+    def test_unknown_entity_is_404(self, client, org_id, admin):
+        _login(client)
+        response = client.get(
+            "/records/not_a_real_entity/00000000-0000-0000-0000-000000000000/timeline"
+        )
+        assert response.status_code == 404
+
+    def test_unauthenticated_is_401(self, client, org_id, admin):
+        response = client.get(
+            "/records/person/00000000-0000-0000-0000-000000000000/timeline"
+        )
+        assert response.status_code == 401
+
+
 class TestAggregate:
     def test_count_grouped_by_status(self, client, org_id, admin):
         _login(client)

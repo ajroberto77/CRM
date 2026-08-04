@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from server.core import events, identity, permissions, registry, repository
+from server.core import events, identity, interactions, permissions, registry, repository
 
 # interaction.kind -> the contact_channel kind its from_channel/to_channels
 # values actually are. Only kinds with an unambiguous mapping derive at all;
@@ -82,10 +82,20 @@ def resolve_or_create_person(principal, channel_kind: str, raw_value: str) -> Op
 
 def _derive_contacts(event: events.RecordEvent) -> None:
     """On a new interaction, resolve (or materialize) a person for every
-    channel value it names. Idempotent: re-processing the same interaction
-    (or a second interaction from the same channel) never creates a second
-    person, because the contact_channel lookup above is the same query
-    every time."""
+    channel value it names, and record each as a participant (role 'from'
+    for `from_channel`, 'to' for each of `to_channels`) -- Phase 8's
+    `interaction_participants` row is what makes "every interaction this
+    person was part of" (the merged timeline) a query instead of a
+    re-derivation every time; without it, the resolution above happened and
+    the result was simply discarded.
+
+    Idempotent both ways: re-processing the same interaction (or a second
+    interaction from the same channel) never creates a second person,
+    because the contact_channel lookup in `resolve_or_create_person` is the
+    same query every time, and never creates a second participant row,
+    because `interactions.add_participant()`'s own uniqueness does the same
+    for it.
+    """
     interaction = event.after
     if not interaction:
         return
@@ -94,10 +104,15 @@ def _derive_contacts(event: events.RecordEvent) -> None:
         return
 
     principal = permissions.system_principal(event.org_id, "derive contact from interaction")
-    raw_values = [interaction.get("from_channel")] + list(interaction.get("to_channels") or [])
-    for raw in raw_values:
-        if raw:
-            resolve_or_create_person(principal, channel_kind, raw)
+    interaction_id = str(interaction["id"])
+    roled_values = [("from", interaction.get("from_channel"))]
+    roled_values += [("to", raw) for raw in (interaction.get("to_channels") or [])]
+    for role, raw in roled_values:
+        if not raw:
+            continue
+        person_id = resolve_or_create_person(principal, channel_kind, raw)
+        if person_id:
+            interactions.add_participant(principal, interaction_id, person_id=person_id, role=role)
 
 
 def _promote_on_human_edit(event: events.RecordEvent) -> None:

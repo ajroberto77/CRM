@@ -572,6 +572,28 @@ TABLES: dict[str, dict[str, str]] = {
         "updated_at": _CREATED,
     },
 
+    # Who was actually on an interaction -- resolved automatically by
+    # server/core/derivation.py from `interactions.from_channel`/`to_channels`
+    # (the same contact_channel lookup that materializes a person for a new
+    # channel value), recorded here instead of thrown away so "every
+    # interaction this person was part of" is a query, not a re-derivation.
+    # Not a registered entity (server/core/interactions.py owns its SQL,
+    # same treatment as `core.document_signers`/`core.associations`): an
+    # internal detail nobody creates or edits directly. No owner_id --
+    # who-talked-to-whom is org-wide contact-graph metadata (safety rule 10),
+    # exactly like `core.associations` has none for the same reason; a
+    # participant row names WHICH interaction and WHICH person, never a
+    # body, so there is nothing here that needs owner-scoping the way
+    # `interactions.body` does.
+    "core.interaction_participants": {
+        "id": _UUID_PK,
+        "org_id": _ORG_FK,
+        "interaction_id": "uuid NOT NULL REFERENCES core.interactions(id) ON DELETE CASCADE",
+        "person_id": "uuid NOT NULL REFERENCES core.persons(id) ON DELETE CASCADE",
+        "role": "text NOT NULL DEFAULT 'to' CHECK (role IN ('from','to'))",
+        "created_at": _CREATED,
+    },
+
     # Period-shaped data, deliberately not squeezed into `interactions` (event-
     # shaped) or a record's `custom` (would need an expression index per
     # metric). "Acme's Q3 EBITDA" -- there is a new one every quarter, so it is
@@ -990,6 +1012,16 @@ INDEXES: tuple[str, ...] = (
     "ON core.contact_channels (org_id, kind, value_normalized)",
     "CREATE INDEX IF NOT EXISTS ix_contact_channels_org_person "
     "ON core.contact_channels (org_id, person_id)",
+
+    # Uniqueness makes `interactions.py`'s own participant-recording
+    # idempotent (ON CONFLICT DO NOTHING) the same way re-processing the
+    # same interaction already is for contact derivation. The second index
+    # is the actual query a person's merged timeline runs: every
+    # interaction_id a given person participated in.
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_interaction_participants "
+    "ON core.interaction_participants (org_id, interaction_id, person_id, role)",
+    "CREATE INDEX IF NOT EXISTS ix_interaction_participants_org_person "
+    "ON core.interaction_participants (org_id, person_id)",
 
     "CREATE INDEX IF NOT EXISTS ix_metric_facts_org_subject_key "
     "ON core.metric_facts (org_id, subject_type, subject_id, metric_key)",

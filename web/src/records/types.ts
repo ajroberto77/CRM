@@ -147,6 +147,17 @@ export interface ChildrenBlock {
   total: number
 }
 
+/** One entry in a record's merged activity feed -- mirrors
+ * `GET /records/{entity}/{id}/timeline`'s payload shape. `children_of()`'s
+ * blocks (notes/tasks/documents/...) flattened to individual records, plus
+ * -- for a person -- their interactions, all merged and sorted
+ * newest-first by `occurred_at`. */
+export interface TimelineEntry {
+  entity: string
+  record: RecordRow
+  occurred_at: string | null
+}
+
 export interface SavedView {
   id: string
   entity: string
