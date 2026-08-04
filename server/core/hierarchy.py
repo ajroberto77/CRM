@@ -34,6 +34,10 @@ from server.db import pool
 
 MAX_DEPTH = 50
 
+
+class NotHierarchical(ValueError):
+    """A role was asked to walk a chain, but is not marked `hierarchical=True`."""
+
 # Walks the association graph one hierarchical role at a time, org-scoped,
 # current edges only (valid_to IS NULL -- a closed relationship is history,
 # not part of today's structure). `%(start_side)s`/`%(next_side)s...` are
@@ -83,7 +87,7 @@ _DESCENDANTS_SQL = """
 def _require_hierarchical(role: str) -> registry.AssociationRole:
     role_spec = registry.role(role)
     if not role_spec.hierarchical:
-        raise ValueError(f"{role!r} is not a hierarchical association role")
+        raise NotHierarchical(f"{role!r} is not a hierarchical association role")
     return role_spec
 
 
@@ -102,7 +106,11 @@ def ancestor_type_ids(
             "subject_id": str(subject_id), "max_depth": max_depth,
         },
     )
-    return [dict(r) for r in cur.fetchall()]
+    # psycopg2 hands back a uuid column as a real `uuid.UUID`, not `str` --
+    # normalized here so every caller (this module's own ultimate_parent_of()
+    # "no parent" branch, associations.py's cycle check, the hierarchy API)
+    # sees the same type regardless of which branch produced the row.
+    return [{**dict(r), "entity_id": str(r["entity_id"])} for r in cur.fetchall()]
 
 
 def ancestors_of(
@@ -134,7 +142,8 @@ def descendants_of(
                 "subject_id": str(subject_id), "max_depth": max_depth,
             },
         )
-        return [dict(r) for r in cur.fetchall()]
+        # See ancestor_type_ids()'s comment: normalized to str for the same reason.
+        return [{**dict(r), "entity_id": str(r["entity_id"])} for r in cur.fetchall()]
 
 
 def ultimate_parent_of(

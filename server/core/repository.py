@@ -368,6 +368,8 @@ def _read_scope(
 def get_record(principal: Principal, entity: str, record_id: str) -> dict[str, Any]:
     principal.require("read", entity)
     spec = registry.entity(entity)
+    if spec.admin_only:
+        principal.require_admin(f"{entity} is administrative")
     visible_sql, visible_params = permissions.visibility_predicate(
         principal, entity, "read"
     )
@@ -385,17 +387,25 @@ def get_record(principal: Principal, entity: str, record_id: str) -> dict[str, A
 
 
 def fetch_many(
-    principal: Principal, entity: str, ids: Iterable[str]
+    principal: Principal, entity: str, ids: Iterable[str],
+    *, require_admin_only: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Batch fetch by id, respecting visibility. Used by the association
     hydrator so a record page is one query per entity type rather than one per
     related row — and so related records the principal cannot read are simply
-    absent, rather than joined in behind the repository's back."""
+    absent, rather than joined in behind the repository's back.
+
+    `require_admin_only=False` is `resolve_labels()`'s deliberate carve-out
+    (see its docstring) -- every other caller keeps the same `admin_only`
+    guard `list_records`/`get_record`/`create`/`update`/`delete` all apply.
+    """
     ids = [str(i) for i in ids if i]
     if not ids:
         return {}
     principal.require("read", entity)
     spec = registry.entity(entity)
+    if require_admin_only and spec.admin_only:
+        principal.require_admin(f"{entity} is administrative")
     visible_sql, visible_params = permissions.visibility_predicate(
         principal, entity, "read"
     )
@@ -414,6 +424,48 @@ def fetch_many(
             _finalize_read(principal, entity, dict(r), context=context) for r in cur.fetchall()
         ]
     return {str(r["id"]): r for r in rows}
+
+
+def resolve_labels(
+    principal: Principal, refs: dict[str, Iterable[str]]
+) -> dict[str, dict[str, str]]:
+    """Resolve `{entity: [ids]}` to `{entity: {id: label}}`, for rendering a
+    reference field's value as a name instead of the raw uuid it stores.
+
+    Built on `fetch_many(..., require_admin_only=False)` rather than
+    `list_records()`: several of the reference tables most in need of a
+    human label are `admin_only` -- a picklist-shaped settings entity like
+    `pipeline` -- and `list_records`/`get_record` correctly hard-require
+    admin on those entity-wide. A member viewing a record that points at one
+    must still see its name, not a uuid, without personally administering
+    that picklist -- the same "readable, not admin" carve-out
+    `custom_field_defs()` already makes for schema metadata, applied here to
+    reference data instead.
+
+    Only `read` is required, per entity, never admin -- but `visibility_
+    predicate()` (applied inside `fetch_many()`) still governs each row, so
+    one this principal cannot see resolves no label. An id with no visible
+    match is silently absent from the result, never a 404 or a placeholder:
+    this is a label lookup, not an existence oracle. An entity requested
+    with more than `query.MAX_IN_VALUES` ids raises, matching how the filter
+    compiler's own `'in'` operator bounds a value list -- silently
+    truncating instead would be indistinguishable from "the rest aren't
+    visible," a different failure this function does deliberately allow.
+    """
+    resolved: dict[str, dict[str, str]] = {}
+    for entity, raw_ids in refs.items():
+        spec = registry.entity(entity)  # UnknownEntity -> 404, even for an empty id list
+        ids = sorted({str(i) for i in raw_ids if i})
+        if len(ids) > query.MAX_IN_VALUES:
+            raise query.FilterError(
+                f"resolve_labels: at most {query.MAX_IN_VALUES} ids per entity "
+                f"per request, got {len(ids)} for {entity!r}"
+            )
+        rows = fetch_many(principal, entity, ids, require_admin_only=False)
+        resolved[entity] = {
+            id_: str(row.get(spec.label_field) or "") for id_, row in rows.items()
+        }
+    return resolved
 
 
 # ── Write ────────────────────────────────────────────────────────────────────

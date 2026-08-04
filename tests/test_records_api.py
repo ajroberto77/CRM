@@ -30,6 +30,29 @@ class TestEntityMetadata:
         assert "person" in names
         assert "fund" in names  # modules/funds proves the module seam here too
 
+    def test_list_entities_carries_nav_placement(self, client, org_id, admin):
+        _login(client)
+        entities = {e["name"]: e for e in client.get("/records").json()["entities"]}
+        assert entities["organization"]["nav"] == "primary"
+        assert entities["fund"]["nav_group"] == "Investing"
+        assert entities["contact_channel"]["nav"] == "none"
+        assert entities["pipeline"]["nav"] == "settings"  # admin's own view: derived
+
+    def test_list_entities_excludes_admin_only_for_a_granted_non_admin(
+        self, client, org_id, member
+    ):
+        """`list_records`/`get_record` hard-require admin on an `admin_only`
+        entity regardless of any role grant -- an explicit read grant on
+        `pipeline` must not make it appear here, or the sidebar dangles a
+        link that always 403s."""
+        role = users.create_role(org_id, "Reader")
+        users.set_role_scope(org_id, str(role["id"]), "pipeline", read_level="all")
+        users.assign_role(org_id, str(member["id"]), str(role["id"]))
+
+        _login(client, "member@example.com")
+        names = {e["name"] for e in client.get("/records").json()["entities"]}
+        assert "pipeline" not in names
+
     def test_schema_describes_fields_and_custom_fields(self, client, org_id, admin):
         _login(client)
         response = client.get("/records/organization/schema")
@@ -55,6 +78,39 @@ class TestEntityMetadata:
         _login(client, "member@example.com")
         response = client.get("/records/organization/schema")
         assert response.status_code == 200
+
+    def test_schema_exposes_labels_references_and_operators(self, client, org_id, admin):
+        """Phase 0's registry declarations (label/references/list_columns)
+        must actually reach the wire -- this is what the frontend's filter
+        builder and reference-field picker are driven from."""
+        _login(client)
+        response = client.get("/records/deal/schema")
+        assert response.status_code == 200
+        body = response.json()
+        pipeline_field = body["fields"]["pipeline_id"]
+        assert pipeline_field["references"] == "pipeline"
+        assert pipeline_field["references_type_field"] is None
+        assert pipeline_field["label"] == "Pipeline"
+        assert "eq" in pipeline_field["operators"]
+        assert body["list_columns"] == ["name", "stage", "amount", "status", "rotting"]
+
+    def test_schema_exposes_polymorphic_references(self, client, org_id, admin):
+        _login(client)
+        response = client.get("/records/task/schema")
+        assert response.status_code == 200
+        subject_field = response.json()["fields"]["subject_id"]
+        assert subject_field["references"] is None
+        assert subject_field["references_type_field"] == "subject_type"
+
+    def test_a_computed_unfilterable_field_has_no_operators(self, client, org_id, admin):
+        """`deal.rotting` is a compute field, deliberately unfilterable
+        (registry.verify() enforces this) -- the frontend's filter builder
+        must not offer operators for a field the compiler would reject."""
+        _login(client)
+        response = client.get("/records/deal/schema")
+        rotting_field = response.json()["fields"]["rotting"]
+        assert rotting_field["filterable"] is False
+        assert rotting_field["operators"] == []
 
 
 class TestCrud:
@@ -210,6 +266,20 @@ class TestPermissions:
         response = client.get("/records/pipeline")
         assert response.status_code == 403
 
+    def test_admin_only_entity_get_by_id_is_403_for_a_member(self, client, org_id, admin, member):
+        """Regression: `get_record` used to skip the `admin_only` guard the
+        other four CRUD paths already applied, so a member who somehow had a
+        record id could fetch it directly even though `GET /records/pipeline`
+        (list) correctly 403s them."""
+        _login(client)
+        pipeline = client.post(
+            "/records/pipeline", json={"name": "Standard Pipeline"}
+        ).json()["record"]
+
+        _login(client, "member@example.com")
+        response = client.get(f"/records/pipeline/{pipeline['id']}")
+        assert response.status_code == 403
+
     def test_bad_filter_syntax_is_400(self, client, org_id, admin):
         _login(client)
         response = client.get(
@@ -234,6 +304,15 @@ class TestEntityRoles:
         assert ("works_at", "from") in roles  # person is the from-side
         # advisor_to's inverse label applies to person as a to-side too
         assert any(r == "advisor_to" and d == "to" for r, d in roles)
+
+    def test_roles_carry_group_and_label(self, client, org_id, admin):
+        _login(client)
+        roles = client.get("/records/person/roles").json()["roles"]
+        works_at = next(r for r in roles if r["role"] == "works_at" and r["direction"] == "from")
+        assert works_at["group"] == "People"
+        assert works_at["group_order"] == 30
+        assert works_at["label"] == "Works at"
+        assert works_at["hierarchical"] is False
 
     def test_unknown_entity_is_404(self, client, org_id, admin):
         _login(client)

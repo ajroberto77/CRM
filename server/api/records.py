@@ -40,7 +40,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from server.api.auth import current_principal
-from server.core import associations, permissions, registry, repository
+from server.core import associations, permissions, query, registry, repository
 from server.core.permissions import Principal
 
 router = APIRouter(prefix="/records", tags=["records"])
@@ -82,6 +82,10 @@ class EndAssociationBody(BaseModel):
     on: Optional[str] = None
 
 
+class LabelsBody(BaseModel):
+    refs: dict[str, list[str]] = Field(default_factory=dict)
+
+
 def _parse_json_param(name: str, raw: Optional[str]) -> Any:
     if raw is None:
         return None
@@ -93,21 +97,34 @@ def _parse_json_param(name: str, raw: Optional[str]) -> Any:
         ) from exc
 
 
+def _effective_nav(spec: registry.EntitySpec) -> str:
+    """`EntitySpec.nav`'s derived default (registry.py's own docstring): ""
+    means "settings" for an admin_only entity, "primary" otherwise."""
+    if spec.nav:
+        return spec.nav
+    return "settings" if spec.admin_only else "primary"
+
+
 # ── Metadata ─────────────────────────────────────────────────────────────────
 
 @router.get("")
 def list_entities(principal: Principal = Depends(current_principal)) -> dict[str, Any]:
     """Every entity this principal can at least read — what the sidebar/nav is
-    built from. Not a security boundary on its own (actual access is enforced
-    per-request regardless), just a UI that never dangles a link to nothing."""
+    built from. `admin_only` entities are dropped for a non-admin: `list_records`/
+    `get_record`/`fetch_many` hard-require admin on them regardless of any role
+    grant, so listing one here would dangle a link that always 403s."""
     entities = []
     for spec in registry.all_entities():
         if not principal.for_object(spec.name).allows("read"):
+            continue
+        if spec.admin_only and not principal.is_admin:
             continue
         entities.append({
             "name": spec.name, "label": spec.label or spec.name,
             "label_field": spec.label_field, "admin_only": spec.admin_only,
             "module": spec.module,
+            "nav": _effective_nav(spec), "nav_group": spec.nav_group,
+            "nav_order": spec.nav_order,
         })
     return {"entities": entities}
 
@@ -131,6 +148,13 @@ def entity_schema(
             "sortable": fspec.sortable,
             "writable": fspec.writable and perms.writable_field(name),
             "required": fspec.required, "options": list(fspec.options),
+            "label": fspec.label or name.replace("_", " "),
+            "references": fspec.references,
+            "references_type_field": fspec.references_type_field,
+            # The filter builder's vocabulary for this field, straight from
+            # the compiler's own (kind, operator) table -- one definition,
+            # never a second copy hand-maintained on the frontend.
+            "operators": query.operators_for(fspec.kind) if fspec.filterable else [],
         }
 
     custom_fields = []
@@ -152,6 +176,7 @@ def entity_schema(
         "searchable": list(spec.searchable),
         "supports_custom_fields": spec.supports_custom_fields,
         "admin_only": spec.admin_only,
+        "list_columns": list(spec.list_columns),
         "fields": fields, "custom_fields": custom_fields,
         "can_create": perms.can_create,
         "read_level": perms.read_level, "edit_level": perms.edit_level,
@@ -171,19 +196,37 @@ def entity_roles(
 
     available = []
     for role_spec in registry.roles():
+        group = role_spec.group or role_spec.module
         if entity in role_spec.from_types:
             available.append({
                 "role": role_spec.name, "direction": "from",
-                "label": role_spec.name.replace("_", " "),
+                "label": role_spec.label or role_spec.name.replace("_", " "),
                 "target_types": list(role_spec.to_types),
+                "group": group, "group_order": role_spec.group_order,
+                "hierarchical": role_spec.hierarchical,
             })
         if entity in role_spec.to_types and not role_spec.symmetric:
             available.append({
                 "role": role_spec.name, "direction": "to",
                 "label": (role_spec.inverse_label or role_spec.name).replace("_", " "),
                 "target_types": list(role_spec.from_types),
+                "group": group, "group_order": role_spec.group_order,
+                "hierarchical": role_spec.hierarchical,
             })
     return {"roles": available}
+
+
+@router.post("/labels")
+def resolve_labels(
+    body: LabelsBody, principal: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    """Batch-resolve `{entity: [ids]}` to `{entity: {id: label}}` -- what a
+    `FieldSpec.references`/`references_type_field` value renders instead of
+    the raw uuid it stores. Registered here, ahead of the generic
+    `POST /{entity}` create route below, so a literal "labels" path segment
+    resolves to this route rather than being parsed as an entity name
+    (FastAPI/Starlette matches path templates in registration order)."""
+    return {"labels": repository.resolve_labels(principal, body.refs)}
 
 
 # ── Read ─────────────────────────────────────────────────────────────────────
@@ -243,6 +286,24 @@ def related_records(
         roles=role_list, as_of=as_of, include_history=include_history,
     )
     return {"related": blocks}
+
+
+@router.get("/{entity}/{record_id}/hierarchy")
+def record_hierarchy(
+    entity: str, record_id: str,
+    role: str = Query(..., description="a hierarchical association role"),
+    direction: str = Query(default="ancestors", description="ancestors|descendants"),
+    principal: Principal = Depends(current_principal),
+) -> dict[str, Any]:
+    """The ownership/rollup chain above (or below) one record, for one
+    hierarchical role -- e.g. `role=owned_by` walks the Ultimate Parent
+    Company chain, `role=rolls_up_to` walks the investment-relationship
+    rollup. Wraps `hierarchy.ancestors_of`/`descendants_of`, hydrated the
+    same way `related_blocks` hydrates association edges."""
+    chain = associations.hierarchy_chain(
+        principal, role, entity, record_id, direction=direction,
+    )
+    return {"chain": chain}
 
 
 # ── Write ────────────────────────────────────────────────────────────────────

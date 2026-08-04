@@ -268,6 +268,33 @@ def edges_for(
         return [dict(r) for r in cur.fetchall()]
 
 
+def _hydrate_by_type(
+    principal: Principal, items: Iterable[dict[str, Any]], *, type_key: str, id_key: str,
+) -> dict[str, dict[str, Any]]:
+    """Group `items` by `item[type_key]`, batch-fetch each group in one
+    `repository.fetch_many()` call, and degrade a type the principal cannot
+    read AT ALL to an empty block rather than an error.
+
+    Shared by `related_blocks()` (association edges, grouped by
+    `other_type`/`other_id`) and `hierarchy_chain()` (ancestor/descendant
+    steps, grouped by `entity_type`/`entity_id`) -- both hydrate a list of
+    typed refs through the exact same shape, so the loop exists once.
+    """
+    by_type: dict[str, set[str]] = {}
+    for item in items:
+        by_type.setdefault(item[type_key], set()).add(str(item[id_key]))
+
+    hydrated: dict[str, dict[str, Any]] = {}
+    for entity, ids in by_type.items():
+        try:
+            hydrated[entity] = repository.fetch_many(principal, entity, ids)
+        except permissions.PermissionDenied:
+            # No read access to that entity type at all: the block is empty
+            # rather than an error, exactly like a 'none' visibility level.
+            hydrated[entity] = {}
+    return hydrated
+
+
 def related_blocks(
     principal: Principal,
     subject_type: str,
@@ -291,18 +318,7 @@ def related_blocks(
     if not edges:
         return {}
 
-    by_type: dict[str, set[str]] = {}
-    for edge in edges:
-        by_type.setdefault(edge["other_type"], set()).add(str(edge["other_id"]))
-
-    hydrated: dict[str, dict[str, Any]] = {}
-    for entity, ids in by_type.items():
-        try:
-            hydrated[entity] = repository.fetch_many(principal, entity, ids)
-        except permissions.PermissionDenied:
-            # No read access to that entity type at all: the block is empty
-            # rather than an error, exactly like a 'none' visibility level.
-            hydrated[entity] = {}
+    hydrated = _hydrate_by_type(principal, edges, type_key="other_type", id_key="other_id")
 
     blocks: dict[str, list[dict[str, Any]]] = {}
     for edge in edges:
@@ -326,6 +342,52 @@ def related_blocks(
             "record": target,
         })
     return blocks
+
+
+def hierarchy_chain(
+    principal: Principal,
+    role: str,
+    subject_type: str,
+    subject_id: str,
+    *,
+    direction: str = "ancestors",
+    max_depth: int = hierarchy.MAX_DEPTH,
+) -> list[dict[str, Any]]:
+    """The ancestor or descendant chain for a hierarchical role, hydrated --
+    same shape as `related_blocks()`: one `fetch_many()` per entity type
+    found in the chain, so a step the principal cannot read is simply absent
+    rather than a join that renders it anyway. Raises `hierarchy.
+    NotHierarchical` if `role` is not marked `hierarchical=True`.
+    """
+    if direction == "ancestors":
+        steps = hierarchy.ancestors_of(
+            principal, role, subject_type, subject_id, max_depth=max_depth
+        )
+    elif direction == "descendants":
+        steps = hierarchy.descendants_of(
+            principal, role, subject_type, subject_id, max_depth=max_depth
+        )
+    else:
+        raise AssociationError(
+            f"direction must be 'ancestors' or 'descendants', got {direction!r}"
+        )
+    if not steps:
+        return []
+
+    hydrated = _hydrate_by_type(principal, steps, type_key="entity_type", id_key="entity_id")
+
+    chain = []
+    for step in steps:
+        record = hydrated.get(step["entity_type"], {}).get(str(step["entity_id"]))
+        if record is None:
+            continue
+        chain.append({
+            "entity_type": step["entity_type"],
+            "entity_id": str(step["entity_id"]),
+            "depth": step["depth"],
+            "record": record,
+        })
+    return chain
 
 
 def roles_of(

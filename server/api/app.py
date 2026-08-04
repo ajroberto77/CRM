@@ -25,7 +25,7 @@ from server.api import channels as channels_api
 from server.api import proposals as proposals_api
 from server.api import search as search_api
 from server.api import settings as settings_api
-from server.core import account_link, associations, modules, passwords, permissions, query, registry, repository, sessions, users
+from server.core import account_link, associations, hierarchy, modules, passwords, permissions, query, registry, repository, sessions, users
 from server.core import settings as core_settings
 from server.core.permissions import Principal
 from server.db import pool, schema
@@ -107,6 +107,7 @@ def _forbidden(request: Request, exc: Exception) -> Response:
 @app.exception_handler(registry.UnknownField)
 @app.exception_handler(query.FilterError)
 @app.exception_handler(associations.AssociationError)
+@app.exception_handler(hierarchy.NotHierarchical)
 @app.exception_handler(core_settings.UnknownSection)
 @app.exception_handler(llm_router.LLMError)
 @app.exception_handler(embeddings_llm.EmbeddingError)
