@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { apiGet } from '../lib/api'
-import type { EntitySchema, EntitySummary } from './types'
+import type { AssociationRoleOption, EntitySchema, EntitySummary } from './types'
 
 interface SchemaState {
   schema: EntitySchema | null
@@ -86,4 +86,42 @@ export function useEntityList(): { entities: EntitySummary[]; loading: boolean; 
   }, [])
 
   return { entities, loading, error }
+}
+
+/** Fetches GET /records/{entity}/roles -- every association role `entity`
+ * can take part in, from either side. `RecordDetail.tsx` uses this to find
+ * which hierarchical roles apply (driving `HierarchyChain` generically,
+ * with no per-role/per-entity special case -- R6) without duplicating
+ * `LinkRecordControl.tsx`'s own fetch of the same endpoint (that one stays
+ * lazy, fetching only once its "+ Link" form opens). */
+export function useEntityRoles(entity: string | undefined): {
+  roles: AssociationRoleOption[]
+  loading: boolean
+  error: string | null
+} {
+  const [roles, setRoles] = useState<AssociationRoleOption[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!entity) return
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    apiGet<{ roles: AssociationRoleOption[] }>(`/records/${entity}/roles`)
+      .then((r) => {
+        if (!cancelled) setRoles(r.roles)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [entity])
+
+  return { roles, loading, error }
 }

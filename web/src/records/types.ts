@@ -95,11 +95,40 @@ export type FilterNode =
 export interface RelatedItem {
   association_id: string
   role: string
+  direction: 'in' | 'out'
+  attributes: Record<string, unknown>
+  valid_from: string | null
+  valid_to: string | null
+  /** The related record's own entity type -- what a link to it routes to. */
+  entity: string
   record: RecordRow
+  /** Section this role's edges render under (server/core/registry.py's
+   * `AssociationRole.group`, resolved through `role_presentation()`). */
+  group: string
+  group_order: number
   [key: string]: unknown
 }
 
 export type RelatedBlocks = Record<string, RelatedItem[]>
+
+/** One direction of one association role `entity` can take part in --
+ * mirrors `GET /records/{entity}/roles`' payload shape. */
+export interface AssociationRoleOption {
+  role: string
+  direction: 'from' | 'to'
+  label: string
+  target_types: string[]
+  group: string
+  group_order: number
+  hierarchical: boolean
+}
+
+export interface HierarchyStep {
+  entity_type: string
+  entity_id: string
+  depth: number
+  record: RecordRow
+}
 
 export interface SavedView {
   id: string

@@ -326,12 +326,8 @@ def related_blocks(
         if target is None:
             continue
         role_spec = registry.role(edge["role"])
-        label = (
-            role_spec.inverse_label
-            if edge["direction"] == "in" and role_spec.inverse_label
-            else edge["role"]
-        )
-        blocks.setdefault(label, []).append({
+        presentation = registry.role_presentation(role_spec, edge["direction"])
+        blocks.setdefault(presentation["label"], []).append({
             "association_id": str(edge["id"]),
             "role": edge["role"],
             "direction": edge["direction"],
@@ -340,6 +336,8 @@ def related_blocks(
             "valid_to": edge["valid_to"],
             "entity": edge["other_type"],
             "record": target,
+            "group": presentation["group"],
+            "group_order": presentation["group_order"],
         })
     return blocks
 

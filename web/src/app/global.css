@@ -555,6 +555,21 @@ button:disabled {
   margin: 0;
 }
 
+.crm-related-group {
+  margin-bottom: 16px;
+}
+
+.crm-related-group-header {
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--text-subtle);
+  margin-bottom: 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-default);
+}
+
 .crm-related-block {
   margin-bottom: 12px;
 }
@@ -568,6 +583,94 @@ button:disabled {
 .crm-related-item {
   font-size: var(--fs-small);
   padding: 3px 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-related-item .crm-reference-link {
+  /* Same guard .crm-settings-provider-card/.crm-record-board-card-title
+     need for unconstrained text -- a record label (org name, deal name) can
+     be one long unbroken token wider than this panel's fixed 220px width. */
+  overflow-wrap: anywhere;
+}
+
+.crm-related-item-dated {
+  font-size: var(--fs-tiny);
+  color: var(--text-subtle);
+}
+
+.crm-related-item-actions {
+  display: flex;
+  /* Wider than the container's default small gaps -- End and Delete are
+     easy to misclick at 220px column width (same text size, same chrome,
+     differing only by color), and Delete's slot isn't fixed (it only
+     appears next to End when the relationship hasn't already ended), so
+     there's no learned position to rely on either. Extra breathing room
+     between them is the cheap mitigation; window.confirm() on both is the
+     real one. */
+  gap: 10px;
+  margin-left: auto;
+}
+
+.crm-related-item-action {
+  font-size: var(--fs-tiny);
+  /* Matches .crm-link-record-toggle's padding, not the 1px this used to
+     have -- every other clickable button in this file uses at least 3px
+     vertical padding; a destructive control (Delete lives right here) is
+     the wrong place to be the one exception. */
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+}
+
+.crm-related-item-action:hover {
+  background: var(--surface-raised);
+}
+
+.crm-related-item-action-delete {
+  color: var(--status-error);
+  border-color: var(--tint-error-border);
+}
+
+/* ── Hierarchy chain (owned_by / rolls_up_to ancestor breadcrumb) ────────── */
+
+.crm-record-detail-hierarchy {
+  padding: 10px var(--content-pad) 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crm-hierarchy-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-small);
+}
+
+.crm-hierarchy-chain-label {
+  color: var(--text-muted);
+  font-size: var(--fs-tiny);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.crm-hierarchy-chain-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-hierarchy-chain-sep {
+  color: var(--text-subtle);
+}
+
+.crm-hierarchy-chain-error {
+  color: var(--status-error);
 }
 
 /* ── Link record control ─────────────────────────────────────────────── */

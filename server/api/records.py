@@ -196,21 +196,20 @@ def entity_roles(
 
     available = []
     for role_spec in registry.roles():
-        group = role_spec.group or role_spec.module
         if entity in role_spec.from_types:
+            presentation = registry.role_presentation(role_spec, "out")
             available.append({
                 "role": role_spec.name, "direction": "from",
-                "label": role_spec.label or role_spec.name.replace("_", " "),
-                "target_types": list(role_spec.to_types),
-                "group": group, "group_order": role_spec.group_order,
+                "label": presentation["label"], "target_types": list(role_spec.to_types),
+                "group": presentation["group"], "group_order": presentation["group_order"],
                 "hierarchical": role_spec.hierarchical,
             })
         if entity in role_spec.to_types and not role_spec.symmetric:
+            presentation = registry.role_presentation(role_spec, "in")
             available.append({
                 "role": role_spec.name, "direction": "to",
-                "label": (role_spec.inverse_label or role_spec.name).replace("_", " "),
-                "target_types": list(role_spec.from_types),
-                "group": group, "group_order": role_spec.group_order,
+                "label": presentation["label"], "target_types": list(role_spec.from_types),
+                "group": presentation["group"], "group_order": presentation["group_order"],
                 "hierarchical": role_spec.hierarchical,
             })
     return {"roles": available}

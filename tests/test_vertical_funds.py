@@ -129,8 +129,12 @@ class TestWhoInvestedInWhichFund:
         from_investor = associations.related_blocks(
             principal, "organization", str(brightline["id"])
         )
-        assert "lp_in" in from_investor
-        assert from_investor["lp_in"][0]["record"]["name"] == "Northgate Fund II"
+        # "LP in" (AssociationRole.label), not the raw role name -- the
+        # related-records panel renders this block key as a section header
+        # (Phase 4), and "lp_in" leaking through unhumanized would be exactly
+        # the raw-internal-name-in-the-UI bug that label exists to prevent.
+        assert "LP in" in from_investor
+        assert from_investor["LP in"][0]["record"]["name"] == "Northgate Fund II"
 
         from_fund = associations.related_blocks(principal, "fund", str(fund_ii["id"]))
         assert "investors" in from_fund, "the inverse label should name the block"

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { apiDelete, apiGet, ApiError } from '../lib/api'
-import { fieldLabel, recordLabel } from '../lib/format'
+import { fieldLabel } from '../lib/format'
 import { FieldInput, shouldAutoCloseOnCommit } from './FieldInput'
 import { FieldValue } from './FieldValue'
+import { HierarchyChain } from './HierarchyChain'
 import { LinkRecordControl } from './LinkRecordControl'
+import { RelatedPanel } from './RelatedPanel'
+import { useEntityRoles } from './useEntitySchema'
 import { useRecordLabels } from './useRecordLabels'
 import { useSaveField } from './useSaveField'
 import type { EntitySchema, RecordRow, RelatedBlocks } from './types'
@@ -24,6 +27,16 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
   const [related, setRelated] = useState<RelatedBlocks>({})
   const [error, setError] = useState<string | null>(null)
   const [editingField, setEditingField] = useState<string | null>(null)
+  const { roles, loading: rolesLoading } = useEntityRoles(entity)
+  // Every hierarchical role this entity can be the CHILD side of (direction
+  // "from") -- e.g. organization is the "from" side of both core's
+  // `owned_by` and modules/funds' `rolls_up_to`. Driven entirely by the
+  // registry (R6): core never names either role, it just renders whichever
+  // hierarchical roles the schema says apply.
+  const hierarchicalRoles = useMemo(
+    () => roles.filter((r) => r.hierarchical && r.direction === 'from'),
+    [roles],
+  )
 
   const loadRelated = useCallback(() => {
     return apiGet<{ related: RelatedBlocks }>(`/records/${entity}/${recordId}/related`).then((res) =>
@@ -76,7 +89,11 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
   const { labelFor } = useRecordLabels(referenceRefs)
 
   if (error) return <div className="crm-table-status crm-table-status-error">{error}</div>
-  if (!record) return <div className="crm-table-status">Loading…</div>
+  // Waits on roles too, not just record+related -- otherwise the hierarchy
+  // strip (gated on `hierarchicalRoles`, which depends on `roles`) pops in a
+  // beat after the rest of the page has already painted, pushing the header
+  // down. One settled render instead of a visible two-stage layout jump.
+  if (!record || rolesLoading) return <div className="crm-table-status">Loading…</div>
 
   const title = String(record[schema.label_field] ?? record.id)
   const fieldEntries = Object.entries(schema.fields).filter(([name]) => name !== 'id')
@@ -92,6 +109,14 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
           Delete
         </button>
       </div>
+
+      {hierarchicalRoles.length > 0 && (
+        <div className="crm-record-detail-hierarchy">
+          {hierarchicalRoles.map((r) => (
+            <HierarchyChain key={r.role} entity={entity} recordId={recordId} role={r.role} label={r.label} />
+          ))}
+        </div>
+      )}
 
       <div className="crm-record-detail-body">
         <div className="crm-record-detail-fields">
@@ -171,17 +196,7 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
             <h3>Related</h3>
             <LinkRecordControl entity={entity} recordId={recordId} onLinked={loadRelated} />
           </div>
-          {Object.keys(related).length === 0 && <div className="crm-detail-empty">No associations.</div>}
-          {Object.entries(related).map(([label, items]) => (
-            <div className="crm-related-block" key={label}>
-              <div className="crm-related-block-label">{label}</div>
-              {items.map((item) => (
-                <div className="crm-related-item" key={item.association_id}>
-                  {recordLabel(item.record)}
-                </div>
-              ))}
-            </div>
-          ))}
+          <RelatedPanel related={related} onChanged={loadRelated} />
         </div>
       </div>
     </div>

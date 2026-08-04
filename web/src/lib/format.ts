@@ -86,6 +86,17 @@ export function recordLabel(
   return String(record.id ?? '')
 }
 
+/** A relationship's `valid_from`/`valid_to` as one human string -- the one
+ * renderer for a dated association edge (a related-panel item, an
+ * association's own detail), so "since"/"until"/range phrasing doesn't get
+ * reinvented per caller. */
+export function formatDateRange(from: string | null | undefined, to: string | null | undefined): string {
+  if (from && to) return `${formatDate(from)} – ${formatDate(to)}`
+  if (from) return `since ${formatDate(from)}`
+  if (to) return `until ${formatDate(to)}`
+  return ''
+}
+
 /** A field's human label -- the registry's own `FieldSpec.label` when the
  * backend supplied one, else a humanized field name. The one implementation
  * (R1) of what was four independent `name.replace(/_/g, ' ')` call sites. */

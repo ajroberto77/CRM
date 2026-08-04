@@ -271,6 +271,33 @@ def roles() -> list[AssociationRole]:
     return [_ROLES[name] for name in sorted(_ROLES)]
 
 
+def role_presentation(role_spec: AssociationRole, direction: str) -> dict[str, Any]:
+    """The human label/group for one direction of a role -- 'out' is the
+    initiating side (`role_spec.label`), 'in' is the receiving side
+    (`role_spec.inverse_label`), matching `core.association_edges`' own
+    direction vocabulary (server/db/schema.py's VIEWS).
+
+    The one place both `server/api/records.py`'s `entity_roles()` (the "+
+    Link" role picker) and `server/core/associations.py`'s `related_blocks()`
+    (the related-records panel) derive this, so a role's presentation cannot
+    drift between the two the way it did before this existed: `related_blocks()`
+    used to key its 'out'-direction blocks on the raw role name (e.g. `lp_in`)
+    while `entity_roles()` already showed the humanized `label` ("LP in") in
+    the picker that creates the very same edge.
+    """
+    if direction == "in":
+        label = role_spec.inverse_label or role_spec.name.replace("_", " ")
+    elif direction == "out":
+        label = role_spec.label or role_spec.name.replace("_", " ")
+    else:
+        raise ValueError(f"direction must be 'in' or 'out', got {direction!r}")
+    return {
+        "label": label,
+        "group": role_spec.group or role_spec.module,
+        "group_order": role_spec.group_order,
+    }
+
+
 # ── Write-time validators ────────────────────────────────────────────────────
 #
 # The gate the event bus (server/core/events.py) cannot give you. Events are a
