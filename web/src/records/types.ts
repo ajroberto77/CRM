@@ -37,6 +37,10 @@ export interface CustomFieldSchema {
   options: string[]
   indexed: boolean
   writable: boolean
+  /** Same vocabulary as `FieldSchema.operators` -- a custom field carries no
+   * `filterable` flag of its own (it's always reachable through the jsonb
+   * path), so `operators_for(kind)` alone decides it. */
+  operators: string[]
 }
 
 export interface EntitySchema {

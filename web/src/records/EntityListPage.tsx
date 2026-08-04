@@ -6,6 +6,8 @@ import { RecordBoard } from './RecordBoard'
 import { RecordDetail } from './RecordDetail'
 import { CreateRecordModal } from './CreateRecordModal'
 import { buildSearchFilter } from './searchFilter'
+import { FilterBuilder, compileClauses } from './FilterBuilder'
+import type { FilterClause } from './FilterBuilder'
 import { ViewSwitcher } from '../views/ViewSwitcher'
 import { useSavedViews } from '../views/useSavedViews'
 import type { FilterNode, SavedView } from './types'
@@ -31,6 +33,8 @@ function EntityListPageForEntity() {
   // responsive to typing, but the filter (and therefore the list fetch it
   // drives) only updates 250ms after the user stops, not once per keystroke.
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [filterClauses, setFilterClauses] = useState<FilterClause[]>([])
+  const [showFilterBuilder, setShowFilterBuilder] = useState(false)
   const [creating, setCreating] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
 
@@ -39,15 +43,23 @@ function EntityListPageForEntity() {
     return () => clearTimeout(handle)
   }, [search])
 
+  // The full set of filters currently narrowing the list -- the selected
+  // view's own stored filter (opaque, applied as-is), the search box, and
+  // whatever ad hoc rows the filter builder holds, all ANDed together.
+  // "Save view" below saves exactly this, not a stale `activeView?.filters`
+  // (the bug this phase fixes: a search term or builder clause the user is
+  // actually looking at used to vanish from a saved view entirely).
   const filters = useMemo<FilterNode | null>(() => {
     const clauses: FilterNode[] = []
     if (activeView?.filters) clauses.push(activeView.filters)
     if (debouncedSearch.trim() && schema) {
       clauses.push(buildSearchFilter(schema, debouncedSearch.trim()))
     }
+    const builderFilter = compileClauses(filterClauses)
+    if (builderFilter) clauses.push(builderFilter)
     if (clauses.length === 0) return null
     return clauses.length === 1 ? clauses[0] : { and: clauses }
-  }, [activeView, debouncedSearch, schema])
+  }, [activeView, debouncedSearch, filterClauses, schema])
 
   if (loading) return <div className="crm-table-status">Loading…</div>
   if (error || !schema) return <div className="crm-table-status crm-table-status-error">{error ?? 'Unknown entity'}</div>
@@ -70,13 +82,23 @@ function EntityListPageForEntity() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+        <button
+          className={filterClauses.length > 0 ? 'crm-filter-toggle crm-filter-toggle-active' : 'crm-filter-toggle'}
+          onClick={() => setShowFilterBuilder((s) => !s)}
+        >
+          Filters{filterClauses.length > 0 ? ` (${filterClauses.length})` : ''}
+        </button>
         {canUseViews && <ViewSwitcher
           views={views}
           activeViewId={activeView?.id ?? null}
           schema={schema}
           onSelect={setActiveView}
           onSaveCurrent={(name, kind, groupBy) =>
-            saveView(name, activeView?.filters ?? null, activeView?.sort ?? null, activeView?.columns ?? null, kind, groupBy)
+            // The actual, currently-applied filter (view + search + builder
+            // clauses combined) -- not `activeView?.filters`, which is only
+            // ever the PREVIOUSLY selected view's own stored filter and
+            // silently drops whatever the user is actually looking at.
+            saveView(name, filters, activeView?.sort ?? null, activeView?.columns ?? null, kind, groupBy)
           }
           onDelete={(id) => {
             deleteView(id)
@@ -84,6 +106,10 @@ function EntityListPageForEntity() {
           }}
         />}
       </div>
+
+      {showFilterBuilder && (
+        <FilterBuilder schema={schema} clauses={filterClauses} onChange={setFilterClauses} />
+      )}
 
       <div className="crm-entity-page-body">
         <div className={recordId ? 'crm-entity-page-table crm-entity-page-table-split' : 'crm-entity-page-table'}>

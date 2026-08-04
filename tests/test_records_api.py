@@ -94,6 +94,26 @@ class TestEntityMetadata:
         assert "eq" in pipeline_field["operators"]
         assert body["list_columns"] == ["name", "stage", "amount", "status", "rotting"]
 
+    def test_schema_exposes_operators_for_custom_fields_too(self, client, org_id, admin):
+        """A custom field carries no `filterable` flag of its own -- it's
+        always reachable through the jsonb path, so `operators_for(kind)`
+        alone decides its vocabulary, same as a core field (Phase 7's
+        filter builder needs this for a custom field exactly like it
+        already needs it for pipeline_id above)."""
+        _login(client)
+        created = client.post(
+            "/records/custom_field",
+            json={"entity": "organization", "key": "renewal", "kind": "date", "label": "Renewal"},
+        )
+        assert created.status_code == 201, created.text
+
+        response = client.get("/records/organization/schema")
+        assert response.status_code == 200
+        body = response.json()
+        renewal = next(cf for cf in body["custom_fields"] if cf["key"] == "renewal")
+        assert "eq" in renewal["operators"]
+        assert "gt" in renewal["operators"]
+
     def test_schema_exposes_polymorphic_references(self, client, org_id, admin):
         _login(client)
         response = client.get("/records/task/schema")

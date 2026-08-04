@@ -37,12 +37,26 @@ export function RecordTable({ entity, schema, filters, sort, columns, refreshTok
   // curated `list_columns` (Phase 0) beats the auto-derived "every field"
   // fallback, which is the wrong table for an entity with a jsonb blob or a
   // pile of uuid FKs and no curated list yet.
+  //
+  // `columns && columns.length > 0`, not a bare `columns ??` -- a freshly
+  // saved view whose columns were never explicitly chosen gets `columns: []`
+  // back from the API, not `null` (core.saved_views.columns is `NOT NULL
+  // DEFAULT '[]'::jsonb`, so omitting the field on create still reads back
+  // as an empty array). `??` only falls back on null/undefined, so an empty
+  // array from a real, just-saved view used to render a table with zero
+  // columns and zero rows worth of content, not the derived default this
+  // fallback exists to provide.
   const visibleColumns = useMemo(
-    () => columns ?? (schema.list_columns.length > 0 ? schema.list_columns : defaultColumns(schema)),
+    () =>
+      columns && columns.length > 0
+        ? columns
+        : schema.list_columns.length > 0
+          ? schema.list_columns
+          : defaultColumns(schema),
     [columns, schema],
   )
   const effectiveSort = useMemo(
-    () => sort ?? schema.default_sort,
+    () => (sort && sort.length > 0 ? sort : schema.default_sort),
     [sort, schema],
   )
 

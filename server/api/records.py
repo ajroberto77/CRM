@@ -175,6 +175,11 @@ def entity_schema(
                 "key": row["key"], "kind": row["kind"], "label": row["label"],
                 "options": row["options"], "indexed": row["indexed"],
                 "writable": perms.writable_field(ref),
+                # A custom field carries no `filterable` flag of its own --
+                # it's always reachable through the jsonb path (query.py's
+                # sql_expression()), so operators_for(kind) alone decides
+                # its vocabulary, same as a core field.
+                "operators": query.operators_for(row["kind"]),
             })
 
     return {

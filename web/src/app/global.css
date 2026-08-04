@@ -319,6 +319,75 @@ button:disabled {
   width: 240px;
 }
 
+/* ── Filter builder (Phase 7) ─────────────────────────────────────────── */
+
+/* Deliberately NOT .crm-view-pill -- that class (and its -active variant)
+   means "select one of these views," and the Filters button is a
+   different kind of control (a stateful panel toggle) sitting right next
+   to ViewSwitcher's own row of pills. Ordinary button chrome (the default
+   `button` rule's border+surface) reads as a distinct control type instead
+   of a fourth, easily-confused view pill. */
+.crm-filter-toggle-active {
+  background: var(--tint-accent-bg);
+  border-color: var(--tint-accent-border);
+  color: var(--accent);
+}
+
+.crm-filter-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 10px;
+  margin-bottom: 12px;
+}
+
+.crm-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.crm-filter-row-value {
+  flex: 1 1 200px;
+  min-width: 160px;
+}
+
+/* Direct-child, not a bare descendant selector -- a reference field's value
+   control nests a RecordPicker (its own `.crm-record-picker-input` several
+   levels down), which must size itself by its own rules, not have this
+   panel's width:100% silently reach past the row and into it. */
+.crm-filter-row-value > input,
+.crm-filter-row-value > select {
+  width: 100%;
+}
+
+.crm-filter-row-remove {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-subtle);
+  padding: 2px 6px;
+  /* Matches .crm-record-picker-clear's size, not a one-off larger glyph --
+     this is the same "remove one row" affordance as that control and
+     .crm-view-pill-remove, just in a third location. */
+  font-size: var(--fs-small);
+  line-height: 1;
+}
+
+.crm-filter-row-remove:hover {
+  color: var(--status-error);
+}
+
+.crm-filter-add {
+  align-self: flex-start;
+  font-size: var(--fs-small);
+  padding: 4px 10px;
+}
+
 .crm-entity-page-body {
   display: flex;
   gap: 16px;
