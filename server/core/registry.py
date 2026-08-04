@@ -258,6 +258,34 @@ def all_entities() -> list[EntitySpec]:
     return [_ENTITIES[name] for name in entities()]
 
 
+def reverse_references(entity_name: str) -> list[dict[str, Any]]:
+    """Every `(entity, field)` pair whose value CAN point at `entity_name` --
+    a fixed `FieldSpec.references == entity_name` (e.g. `commitment.fund_id`
+    for `fund`), or a polymorphic `references_type_field` (e.g.
+    `task.subject_id`, whose actual target varies per row and can only be
+    checked at query time, not here).
+
+    The one place a record's own page discovers its "children" (R1) --
+    `repository.children_of()` walks this instead of either the frontend or
+    a caller hardcoding which entities/fields point where. A new entity
+    with a `references`/`references_type_field` field is reachable with no
+    change here (R4): this walks the live registry, not a fixed list.
+    """
+    result: list[dict[str, Any]] = []
+    for spec in all_entities():
+        for field_name, fspec in spec.fields.items():
+            if fspec.references == entity_name:
+                result.append({
+                    "entity": spec.name, "field": field_name, "polymorphic": False,
+                })
+            elif fspec.references_type_field is not None:
+                result.append({
+                    "entity": spec.name, "field": field_name, "polymorphic": True,
+                    "type_field": fspec.references_type_field,
+                })
+    return result
+
+
 def role(name: str) -> AssociationRole:
     spec = _ROLES.get(name)
     if spec is None:

@@ -1,15 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { apiDelete, apiGet, ApiError } from '../lib/api'
-import { fieldLabel } from '../lib/format'
-import { FieldInput, shouldAutoCloseOnCommit } from './FieldInput'
-import { FieldValue } from './FieldValue'
+import { Link } from 'react-router-dom'
 import { HierarchyChain } from './HierarchyChain'
 import { LinkRecordControl } from './LinkRecordControl'
+import { RecordFieldList } from './RecordFieldList'
 import { RelatedPanel } from './RelatedPanel'
-import { useEntityRoles } from './useEntitySchema'
-import { useRecordLabels } from './useRecordLabels'
-import { useSaveField } from './useSaveField'
-import type { EntitySchema, RecordRow, RelatedBlocks } from './types'
+import { useRecordDetail } from './useRecordDetail'
+import type { EntitySchema } from './types'
 
 interface RecordDetailProps {
   entity: string
@@ -19,84 +14,23 @@ interface RecordDetailProps {
   onClose: () => void
 }
 
-/** Three regions: header (label + destructive actions), the field form, and
- * the related-associations panel -- the layout every entity's detail page
- * uses, driven entirely by the schema (R4). */
+/** The split-view record panel `EntityListPage.tsx` opens beside its table
+ * (`/e/:entity/:recordId`) -- header, fields, hierarchy chains and the
+ * related panel, for a quick look or edit without leaving the list. The
+ * dedicated `/r/:entity/:id` page (`RecordPage.tsx`, Phase 5) is where the
+ * same data gets its own full-page, three-region layout; both share the
+ * loading/mutation logic through `useRecordDetail()` rather than each
+ * re-implementing it (R1). */
 export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: RecordDetailProps) {
-  const [record, setRecord] = useState<RecordRow | null>(null)
-  const [related, setRelated] = useState<RelatedBlocks>({})
-  const [error, setError] = useState<string | null>(null)
-  const [editingField, setEditingField] = useState<string | null>(null)
-  const { roles, loading: rolesLoading } = useEntityRoles(entity)
-  // Every hierarchical role this entity can be the CHILD side of (direction
-  // "from") -- e.g. organization is the "from" side of both core's
-  // `owned_by` and modules/funds' `rolls_up_to`. Driven entirely by the
-  // registry (R6): core never names either role, it just renders whichever
-  // hierarchical roles the schema says apply.
-  const hierarchicalRoles = useMemo(
-    () => roles.filter((r) => r.hierarchical && r.direction === 'from'),
-    [roles],
-  )
-
-  const loadRelated = useCallback(() => {
-    return apiGet<{ related: RelatedBlocks }>(`/records/${entity}/${recordId}/related`).then((res) =>
-      setRelated(res.related),
-    )
-  }, [entity, recordId])
-
-  useEffect(() => {
-    let cancelled = false
-    setRecord(null)
-    setError(null)
-    Promise.all([apiGet<{ record: RecordRow }>(`/records/${entity}/${recordId}`), loadRelated()])
-      .then(([recordRes]) => {
-        if (cancelled) return
-        setRecord(recordRes.record)
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof ApiError ? err.detail : String(err))
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [entity, recordId, loadRelated])
-
-  const { saveField, saving: savingField } = useSaveField({
-    entity,
-    schema,
-    onSaved: (_, updated) => setRecord(updated),
-    onSettled: (_, __, kind) => {
-      if (shouldAutoCloseOnCommit(kind)) setEditingField(null)
-    },
-  })
-
-  async function handleDelete() {
-    if (!window.confirm(`Delete this ${schema.label.toLowerCase()} record? This cannot be undone.`)) return
-    try {
-      await apiDelete(`/records/${entity}/${recordId}`)
-      onDeleted()
-    } catch (err) {
-      window.alert(err instanceof ApiError ? err.detail : 'Failed to delete')
-    }
-  }
-
-  const referenceRefs = useMemo(() => {
-    if (!record) return []
-    return Object.entries(schema.fields).flatMap(([name, field]) =>
-      field.references ? [{ entity: field.references, id: record[name] as string | null }] : [],
-    )
-  }, [record, schema])
-  const { labelFor } = useRecordLabels(referenceRefs)
+  const {
+    record, related, error, ready, hierarchicalRoles, loadRelated,
+    saveField, savingField, editingField, setEditingField, labelFor, confirmAndDelete,
+  } = useRecordDetail(entity, recordId, schema)
 
   if (error) return <div className="crm-table-status crm-table-status-error">{error}</div>
-  // Waits on roles too, not just record+related -- otherwise the hierarchy
-  // strip (gated on `hierarchicalRoles`, which depends on `roles`) pops in a
-  // beat after the rest of the page has already painted, pushing the header
-  // down. One settled render instead of a visible two-stage layout jump.
-  if (!record || rolesLoading) return <div className="crm-table-status">Loading…</div>
+  if (!ready || !record) return <div className="crm-table-status">Loading…</div>
 
   const title = String(record[schema.label_field] ?? record.id)
-  const fieldEntries = Object.entries(schema.fields).filter(([name]) => name !== 'id')
 
   return (
     <div className="crm-record-detail">
@@ -104,8 +38,11 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
         <button className="crm-detail-close" onClick={onClose} aria-label="Close">
           ×
         </button>
+        <Link className="crm-detail-expand" to={`/r/${entity}/${recordId}`} title="Open full page">
+          ⤢
+        </Link>
         <h2>{title}</h2>
-        <button className="crm-detail-delete" onClick={handleDelete}>
+        <button className="crm-detail-delete" onClick={() => confirmAndDelete(onDeleted)}>
           Delete
         </button>
       </div>
@@ -119,77 +56,15 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
       )}
 
       <div className="crm-record-detail-body">
-        <div className="crm-record-detail-fields">
-          {fieldEntries.map(([name, field]) => {
-            const isEditing = editingField === name
-            const value = record[name]
-            return (
-              <div className="crm-detail-field" key={name}>
-                <div className="crm-detail-field-label">{fieldLabel(field, name)}</div>
-                {isEditing ? (
-                  <FieldInput
-                    kind={field.kind}
-                    value={value}
-                    options={field.options}
-                    references={field.references}
-                    autoFocus
-                    onChange={(v) => saveField(recordId, name, v, field.kind)}
-                    onBlur={() => setEditingField(null)}
-                  />
-                ) : (
-                  <div
-                    className={field.writable ? 'crm-detail-field-value crm-cell-editable' : 'crm-detail-field-value'}
-                    onClick={() => field.writable && !savingField && setEditingField(name)}
-                  >
-                    {value === null || value === undefined || value === '' ? (
-                      <span className="crm-detail-empty">—</span>
-                    ) : (
-                      <FieldValue
-                        kind={field.kind}
-                        value={value}
-                        currency={record.currency as string | undefined}
-                        referenceEntity={field.references}
-                        referenceLabel={field.references ? labelFor(field.references, value as string | null) : null}
-                      />
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-
-          {schema.supports_custom_fields &&
-            schema.custom_fields.map((cf) => {
-              const isEditing = editingField === cf.key
-              const value = record.custom?.[cf.key]
-              return (
-                <div className="crm-detail-field" key={cf.key}>
-                  <div className="crm-detail-field-label">{cf.label || cf.key}</div>
-                  {isEditing ? (
-                    <FieldInput
-                      kind={cf.kind}
-                      value={value}
-                      options={cf.options}
-                      autoFocus
-                      onChange={(v) => saveField(recordId, cf.key, v, cf.kind)}
-                      onBlur={() => setEditingField(null)}
-                    />
-                  ) : (
-                    <div
-                      className={cf.writable ? 'crm-detail-field-value crm-cell-editable' : 'crm-detail-field-value'}
-                      onClick={() => cf.writable && !savingField && setEditingField(cf.key)}
-                    >
-                      {value === null || value === undefined || value === '' ? (
-                        <span className="crm-detail-empty">—</span>
-                      ) : (
-                        <FieldValue kind={cf.kind} value={value} />
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-        </div>
+        <RecordFieldList
+          schema={schema}
+          record={record}
+          editingField={editingField}
+          setEditingField={setEditingField}
+          saveField={saveField}
+          savingField={savingField}
+          labelFor={labelFor}
+        />
 
         <div className="crm-record-detail-related">
           <div className="crm-record-detail-related-header">

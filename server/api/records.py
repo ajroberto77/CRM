@@ -305,6 +305,20 @@ def record_hierarchy(
     return {"chain": chain}
 
 
+@router.get("/{entity}/{record_id}/children")
+def record_children(
+    entity: str, record_id: str, principal: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    """Every record that names this one as its parent through a real FK
+    field -- a fund's commitments, a person's tasks -- as opposed to
+    `/related`, which covers `association` edges. Wraps
+    `repository.children_of()`, which walks `registry.reverse_references()`
+    rather than a per-entity hand-written query."""
+    registry.entity(entity)  # UnknownEntity -> 404 via the app handler
+    blocks = repository.children_of(principal, entity, record_id)
+    return {"children": blocks}
+
+
 # ── Write ────────────────────────────────────────────────────────────────────
 
 @router.post("/{entity}", status_code=status.HTTP_201_CREATED)

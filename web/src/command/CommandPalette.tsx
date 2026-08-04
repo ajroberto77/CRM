@@ -115,7 +115,7 @@ export function CommandPalette() {
 
   function goToResult(result: SearchResult) {
     if (entities.some((e) => e.name === result.owner_type)) {
-      navigate(`/e/${result.owner_type}/${result.owner_id}`)
+      navigate(`/r/${result.owner_type}/${result.owner_id}`)
     }
     setOpen(false)
   }

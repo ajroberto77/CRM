@@ -55,7 +55,7 @@ export function HierarchyChain({ entity, recordId, role, label }: HierarchyChain
       {chain.map((step, i) => (
         <span key={`${step.entity_type}:${step.entity_id}`} className="crm-hierarchy-chain-step">
           {i > 0 && <span className="crm-hierarchy-chain-sep">›</span>}
-          <Link className="crm-reference-link" to={`/e/${step.entity_type}/${step.entity_id}`}>
+          <Link className="crm-reference-link" to={`/r/${step.entity_type}/${step.entity_id}`}>
             {recordLabel(step.record)}
           </Link>
         </span>

@@ -33,7 +33,7 @@ export function FieldValue({ kind, value, currency, referenceEntity, referenceLa
     return (
       <Link
         className="crm-reference-link"
-        to={`/e/${referenceEntity}/${id}`}
+        to={`/r/${referenceEntity}/${id}`}
         onClick={(e) => e.stopPropagation()}
       >
         {referenceLabel || id}

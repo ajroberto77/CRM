@@ -87,7 +87,7 @@ export function RelatedPanel({ related, onChanged }: RelatedPanelProps) {
                 <div className="crm-related-block-label">{label}</div>
                 {related[label].map((item) => (
                   <div className="crm-related-item" key={item.association_id}>
-                    <Link to={`/e/${item.entity}/${item.record.id}`} className="crm-reference-link">
+                    <Link to={`/r/${item.entity}/${item.record.id}`} className="crm-reference-link">
                       {recordLabel(item.record)}
                     </Link>
                     {(item.valid_from || item.valid_to) && (

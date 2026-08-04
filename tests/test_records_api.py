@@ -256,6 +256,36 @@ class TestAssociations:
         assert response.status_code == 400
 
 
+class TestChildren:
+    def test_a_fixed_reference_child_is_found(self, client, org_id, admin):
+        _login(client)
+        fund = client.post("/records/fund", json={"name": "Northgate Fund II"}).json()["record"]
+        commitment = client.post(
+            "/records/commitment",
+            json={"fund_id": fund["id"], "amount": 1_000_000, "status": "signed"},
+        ).json()["record"]
+
+        response = client.get(f"/records/fund/{fund['id']}/children")
+        assert response.status_code == 200
+        blocks = response.json()["children"]
+        commitment_block = next(b for b in blocks if b["entity"] == "commitment")
+        assert commitment_block["total"] == 1
+        assert commitment_block["records"][0]["id"] == commitment["id"]
+
+    def test_unknown_entity_is_404(self, client, org_id, admin):
+        _login(client)
+        response = client.get(
+            "/records/not_a_real_entity/00000000-0000-0000-0000-000000000000/children"
+        )
+        assert response.status_code == 404
+
+    def test_unauthenticated_is_401(self, client, org_id, admin):
+        response = client.get(
+            "/records/organization/00000000-0000-0000-0000-000000000000/children"
+        )
+        assert response.status_code == 401
+
+
 class TestPermissions:
     def test_unauthenticated_is_401(self, client, org_id, admin):
         response = client.get("/records/organization")

@@ -213,6 +213,67 @@ class TestCrud:
             )
 
 
+class TestChildrenOf:
+    """`children_of()` -- the FK-based counterpart to `associations.
+    related_blocks()`, walking `registry.reverse_references()` instead of
+    the association graph."""
+
+    def test_a_fixed_reference_child_is_found(self, principal):
+        fund = repository.create(principal, "fund", {"name": "Northgate Fund II"})
+        commitment = repository.create(
+            principal, "commitment",
+            {"fund_id": str(fund["id"]), "amount": 1_000_000, "status": "signed"},
+        )
+        blocks = repository.children_of(principal, "fund", str(fund["id"]))
+        commitment_block = next(b for b in blocks if b["entity"] == "commitment")
+        assert commitment_block["field"] == "fund_id"
+        assert commitment_block["total"] == 1
+        assert commitment_block["records"][0]["id"] == commitment["id"]
+
+    def test_a_polymorphic_reference_child_is_found(self, principal):
+        org = repository.create(principal, "organization", {"name": "Acme"})
+        task = repository.create(
+            principal, "task",
+            {"title": "Follow up", "subject_type": "organization", "subject_id": str(org["id"])},
+        )
+        blocks = repository.children_of(principal, "organization", str(org["id"]))
+        task_block = next(b for b in blocks if b["entity"] == "task")
+        assert task_block["total"] == 1
+        assert task_block["records"][0]["id"] == task["id"]
+
+    def test_a_polymorphic_child_pointing_elsewhere_is_not_included(self, principal):
+        org = repository.create(principal, "organization", {"name": "Acme"})
+        other_org = repository.create(principal, "organization", {"name": "Other Co"})
+        repository.create(
+            principal, "task",
+            {"title": "Unrelated", "subject_type": "organization", "subject_id": str(other_org["id"])},
+        )
+        blocks = repository.children_of(principal, "organization", str(org["id"]))
+        assert not any(b["entity"] == "task" for b in blocks)
+
+    def test_no_children_is_an_empty_list(self, principal):
+        org = repository.create(principal, "organization", {"name": "Lonely Co"})
+        assert repository.children_of(principal, "organization", str(org["id"])) == []
+
+    def test_a_child_type_the_principal_cannot_read_is_absent(
+        self, org_id, principal, member
+    ):
+        """Same "hidden, not listed" contract `associations.related_blocks()`
+        gives an unreadable related entity."""
+        fund = repository.create(principal, "fund", {"name": "Northgate Fund II"})
+        repository.create(
+            principal, "commitment",
+            {"fund_id": str(fund["id"]), "amount": 1_000_000, "status": "signed"},
+        )
+        role = users.create_role(org_id, "NoCommitments")
+        users.set_role_scope(org_id, str(role["id"]), "fund", read_level="all")
+        users.assign_role(org_id, str(member["id"]), str(role["id"]))
+        actor = permissions.load_principal(member)
+
+        blocks = repository.children_of(actor, "fund", str(fund["id"]))
+        assert not any(b["entity"] == "commitment" for b in blocks)
+
+
 class TestCustomFields:
     def _declare(self, principal, key="renewal", kind="date"):
         return repository.create(

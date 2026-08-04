@@ -509,6 +509,29 @@ button:disabled {
   border-color: var(--tint-error-border);
 }
 
+.crm-detail-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  /* A visible border at rest, not just a hover-only background -- every
+     other clickable control in this row (.crm-detail-delete keeps the
+     default `button` chrome) reads as a discrete control before you touch
+     it; this one shouldn't be the exception a user has to hover to
+     discover, especially sitting right next to a destructive action. */
+  border: 1px solid var(--border-default);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: var(--fs-title);
+}
+
+.crm-detail-expand:hover {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+}
+
 .crm-record-detail-body {
   display: flex;
   gap: var(--content-pad);
@@ -598,7 +621,10 @@ button:disabled {
 .crm-related-item .crm-reference-link {
   /* Same guard .crm-settings-provider-card/.crm-record-board-card-title
      need for unconstrained text -- a record label (org name, deal name) can
-     be one long unbroken token wider than this panel's fixed 220px width. */
+     be one long unbroken token wider than the column it renders in, whether
+     that's the split view's fixed 220px sidebar (.crm-record-detail-related)
+     or ChildrenPanel's reuse of this same class inside the wider
+     .crm-record-page-center column. */
   overflow-wrap: anywhere;
 }
 
@@ -677,6 +703,91 @@ button:disabled {
 
 .crm-hierarchy-chain-error {
   color: var(--status-error);
+}
+
+/* ── Record page (/r/:entity/:id, Phase 5) ───────────────────────────── */
+/* The dedicated full-page record view a reference link/related item/
+   hierarchy step opens, as opposed to "/e/:entity/:recordId"'s split
+   table+detail panel. Three regions side by side, each given real width
+   instead of squeezed into a 220px-wide sidebar. */
+
+.crm-record-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--content-pad);
+}
+
+.crm-record-page-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.crm-record-page-header h1 {
+  flex: 1;
+  font-size: var(--fs-title);
+  margin: 0;
+}
+
+.crm-record-page-back {
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: var(--fs-small);
+  flex-shrink: 0;
+}
+
+.crm-record-page-back:hover {
+  color: var(--text-primary);
+}
+
+.crm-record-page-body {
+  display: flex;
+  gap: var(--content-pad);
+  /* No align-items override -- defaults to stretch, matching
+     .crm-record-detail-body (no override there either), so
+     .crm-record-page-center's left/right borders always span the full row
+     height instead of stopping wherever the center column's OWN content
+     happens to end while a taller sibling column keeps going beside it. */
+}
+
+.crm-record-page-left {
+  flex: 1 1 320px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.crm-record-page-center {
+  flex: 2 1 420px;
+  min-width: 0;
+  border-left: 1px solid var(--border-default);
+  border-right: 1px solid var(--border-default);
+  padding: 0 var(--content-pad);
+}
+
+.crm-record-page-center h3 {
+  font-size: var(--fs-small);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+.crm-record-page-right {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.crm-children-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crm-children-block-more {
+  font-size: var(--fs-tiny);
+  padding: 2px 0 8px;
 }
 
 /* ── Link record control ─────────────────────────────────────────────── */

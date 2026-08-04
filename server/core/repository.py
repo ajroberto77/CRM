@@ -386,6 +386,52 @@ def get_record(principal: Principal, entity: str, record_id: str) -> dict[str, A
     return _finalize_read(principal, entity, dict(row), context=_context_for(principal, entity))
 
 
+CHILDREN_BLOCK_LIMIT = 50
+
+
+def children_of(
+    principal: Principal, entity: str, record_id: str,
+) -> list[dict[str, Any]]:
+    """Every record that names `entity`/`record_id` as its parent through a
+    real FK field (`FieldSpec.references`/`references_type_field`) -- not an
+    `association` edge (`associations.related_blocks()` already covers
+    those). A fund's commitments, a person's tasks, an investment_account's
+    pathway_vehicles: the record page's "children" region, resolved
+    entirely from `registry.reverse_references()` instead of a per-entity
+    hand-written query, so a new child field needs no change here (R4).
+
+    A child entity type the principal cannot read at all (or cannot see
+    without being an admin) is simply absent -- the same "hidden, not
+    listed" contract `associations.related_blocks()` already gives ordinary
+    associations. Each block is capped at `CHILDREN_BLOCK_LIMIT` with its
+    own `total`, so a caller can tell a truncated list from a complete one
+    rather than the count being silently swallowed.
+    """
+    blocks: list[dict[str, Any]] = []
+    for ref in registry.reverse_references(entity):
+        child_entity = ref["entity"]
+        if ref["polymorphic"]:
+            filters: dict[str, Any] = {"and": [
+                {"field": ref["type_field"], "op": "eq", "value": entity},
+                {"field": ref["field"], "op": "eq", "value": record_id},
+            ]}
+        else:
+            filters = {"field": ref["field"], "op": "eq", "value": record_id}
+        try:
+            result = list_records(
+                principal, child_entity, filters=filters, limit=CHILDREN_BLOCK_LIMIT
+            )
+        except permissions.PermissionDenied:
+            continue
+        if result["total"] == 0:
+            continue
+        blocks.append({
+            "entity": child_entity, "field": ref["field"],
+            "records": result["records"], "total": result["total"],
+        })
+    return blocks
+
+
 def fetch_many(
     principal: Principal, entity: str, ids: Iterable[str],
     *, require_admin_only: bool = True,

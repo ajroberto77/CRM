@@ -166,6 +166,32 @@ class TestReferences:
                 "field": "subject_id"} in problems
 
 
+class TestReverseReferences:
+    """`reverse_references()` -- what `repository.children_of()` walks to find
+    a record's "children," the FK-based counterpart to `related_blocks()`'s
+    association edges."""
+
+    def test_a_fixed_reference_is_found(self):
+        refs = registry.reverse_references("fund")
+        assert {"entity": "commitment", "field": "fund_id", "polymorphic": False} in refs
+
+    def test_a_polymorphic_reference_is_found_for_any_target(self):
+        # task.subject_id's target varies per row (checked at query time by
+        # children_of(), not here) -- every entity is a candidate target,
+        # including one with no real task rows pointing at it yet.
+        refs = registry.reverse_references("fund")
+        assert {
+            "entity": "task", "field": "subject_id",
+            "polymorphic": True, "type_field": "subject_type",
+        } in refs
+
+    def test_an_entity_nothing_points_at_has_no_fixed_references(self):
+        # custom_field is never a FieldSpec.references target anywhere in the
+        # registry -- only the always-present polymorphic candidates appear.
+        refs = registry.reverse_references("custom_field")
+        assert not any(not r["polymorphic"] for r in refs)
+
+
 class TestLabelField:
     def test_a_label_field_naming_no_real_field_is_rejected(self, temp_entity):
         spec = temp_entity(registry.EntitySpec(

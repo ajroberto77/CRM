@@ -130,6 +130,19 @@ export interface HierarchyStep {
   record: RecordRow
 }
 
+/** Records naming this one as their parent through a real FK field --
+ * mirrors `GET /records/{entity}/{id}/children`'s payload shape. The
+ * FK-based counterpart to `RelatedItem`/`RelatedBlocks` (association
+ * edges): a fund's commitments, a person's tasks. `records` is capped
+ * (`server/core/repository.py`'s `CHILDREN_BLOCK_LIMIT`); `total` may
+ * exceed its length -- the block is truncated, never the count. */
+export interface ChildrenBlock {
+  entity: string
+  field: string
+  records: RecordRow[]
+  total: number
+}
+
 export interface SavedView {
   id: string
   entity: string
