@@ -365,6 +365,100 @@ def _read_scope(
     return f"({visible_sql}) AND ({compiled.sql})", list(visible_params) + compiled.params
 
 
+# entity -> metric -> SQL template, keyed by the metric names a caller passes.
+_AGGREGATE_METRICS = {
+    "count": "COUNT(*)",
+    "sum": "SUM({expr})",
+    "avg": "AVG({expr})",
+    "min": "MIN({expr})",
+    "max": "MAX({expr})",
+}
+_SUMMABLE_KINDS = ("number", "currency")
+_ORDERABLE_KINDS = ("number", "currency", "date", "datetime")
+
+
+def aggregate(
+    principal: Principal,
+    entity: str,
+    *,
+    group_by: str,
+    metric: str = "count",
+    metric_field: Optional[str] = None,
+    filters: Optional[dict[str, Any]] = None,
+    limit: Optional[int] = None,
+) -> list[dict[str, Any]]:
+    """Group `entity`'s visible rows by one field and reduce another --
+    `deal.status -> count`, `commitment.fund_id -> sum(amount)` -- the one
+    generic aggregation path a dashboard tile is built from (R4), instead of
+    a bespoke SQL query per tile.
+
+    Same visibility predicate and field-permission checks as `list_records()`:
+    an aggregate is still a read, and a masked field is still not
+    aggregatable -- grouping by or summing a field the principal cannot
+    read would otherwise leak its values through the shape of the result,
+    the same disclosure-oracle concern `compile_filter()` already guards
+    against for an ordinary filter.
+
+    `GROUP BY`/`ORDER BY` reference the SELECT list's own `key`/`value`
+    aliases (a documented PostgreSQL extension beyond the SQL standard)
+    rather than repeating the compiled expression -- repeating it would also
+    repeat its bound parameters at a second position in the same statement,
+    exactly the kind of param-ordering bug worth not having to get right by
+    hand.
+    """
+    principal.require("read", entity)
+    spec = registry.entity(entity)
+    if spec.admin_only:
+        principal.require_admin(f"{entity} is administrative")
+    if metric not in _AGGREGATE_METRICS:
+        raise query.FilterError(
+            f"metric must be one of {', '.join(_AGGREGATE_METRICS)}, got {metric!r}"
+        )
+    if metric != "count" and not metric_field:
+        raise query.FilterError(f"metric {metric!r} needs metric_field")
+    limit = query.clamp_limit(limit)
+
+    with pool.transaction(
+        org_id=principal.org_id, user_id=principal.user_id, readonly=True
+    ) as cur:
+        custom = _custom_fields(cur, entity)
+        where, where_params = _read_scope(principal, entity, filters, custom)
+        group = query.field_expression(entity, group_by, principal=principal, custom_fields=custom)
+
+        if metric == "count":
+            metric_sql, metric_params = "COUNT(*)", []
+        else:
+            assert metric_field is not None  # guarded above
+            metric_expr = query.field_expression(
+                entity, metric_field, principal=principal, custom_fields=custom
+            )
+            m_spec = registry.field_spec(entity, metric_field, custom)
+            if metric in ("sum", "avg") and m_spec.kind not in _SUMMABLE_KINDS:
+                raise query.FilterError(
+                    f"{metric} needs a number or currency field, not {m_spec.kind}"
+                )
+            if metric in ("min", "max") and m_spec.kind not in _ORDERABLE_KINDS:
+                raise query.FilterError(
+                    f"{metric} needs a number, currency, date or datetime field, "
+                    f"not {m_spec.kind}"
+                )
+            metric_sql = _AGGREGATE_METRICS[metric].format(expr=metric_expr.sql)
+            metric_params = metric_expr.params
+
+        cur.execute(
+            f"SELECT {group.sql} AS key, {metric_sql} AS value "
+            f"  FROM {spec.table} t WHERE {where} "
+            # `key ASC` breaks a tie between two groups with the same value
+            # (e.g. two statuses each with one deal) -- without it, Postgres
+            # is free to return them in either order from one call to the
+            # next, and a dashboard tile silently reordering itself on every
+            # refresh reads as broken even though nothing is actually wrong.
+            f" GROUP BY key ORDER BY value DESC, key ASC LIMIT %s",
+            group.params + metric_params + where_params + [limit],
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
 def get_record(principal: Principal, entity: str, record_id: str) -> dict[str, Any]:
     principal.require("read", entity)
     spec = registry.entity(entity)

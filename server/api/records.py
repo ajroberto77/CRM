@@ -86,6 +86,14 @@ class LabelsBody(BaseModel):
     refs: dict[str, list[str]] = Field(default_factory=dict)
 
 
+class AggregateBody(BaseModel):
+    group_by: str
+    metric: str = "count"
+    metric_field: Optional[str] = None
+    filters: Optional[dict[str, Any]] = None
+    limit: Optional[int] = None
+
+
 def _parse_json_param(name: str, raw: Optional[str]) -> Any:
     if raw is None:
         return None
@@ -262,6 +270,20 @@ def query_records(
         principal, entity, filters=body.filters, sort=body.sort,
         select=body.select, limit=body.limit, offset=body.offset,
     )
+
+
+@router.post("/{entity}/aggregate")
+def aggregate_records(
+    entity: str, body: AggregateBody, principal: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    """Group `entity`'s visible rows by one field and reduce another --
+    `deal.status -> count`, `commitment.fund_id -> sum(amount)` -- what a
+    dashboard tile builds from instead of a bespoke query per tile (R4)."""
+    groups = repository.aggregate(
+        principal, entity, group_by=body.group_by, metric=body.metric,
+        metric_field=body.metric_field, filters=body.filters, limit=body.limit,
+    )
+    return {"groups": groups}
 
 
 @router.get("/{entity}/{record_id}")

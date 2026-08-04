@@ -274,6 +274,69 @@ class TestChildrenOf:
         assert not any(b["entity"] == "commitment" for b in blocks)
 
 
+class TestAggregate:
+    """`aggregate()` -- the one generic path a dashboard tile builds from."""
+
+    def _make_deals(self, principal):
+        repository.create(principal, "deal", {"name": "A", "status": "open", "amount": 100})
+        repository.create(principal, "deal", {"name": "B", "status": "open", "amount": 300})
+        repository.create(principal, "deal", {"name": "C", "status": "won", "amount": 500})
+
+    def test_count_grouped_by_a_select_field(self, principal):
+        self._make_deals(principal)
+        groups = repository.aggregate(principal, "deal", group_by="status", metric="count")
+        by_key = {g["key"]: g["value"] for g in groups}
+        assert by_key == {"open": 2, "won": 1}
+
+    def test_sum_grouped_by_a_select_field(self, principal):
+        self._make_deals(principal)
+        groups = repository.aggregate(
+            principal, "deal", group_by="status", metric="sum", metric_field="amount",
+        )
+        by_key = {g["key"]: float(g["value"]) for g in groups}
+        assert by_key == {"open": 400, "won": 500}
+
+    def test_filters_narrow_the_aggregated_rows(self, principal):
+        self._make_deals(principal)
+        groups = repository.aggregate(
+            principal, "deal", group_by="status", metric="count",
+            filters={"field": "amount", "op": "gte", "value": 200},
+        )
+        by_key = {g["key"]: g["value"] for g in groups}
+        assert by_key == {"open": 1, "won": 1}
+
+    def test_metric_field_is_required_unless_counting(self, principal):
+        with pytest.raises(query.FilterError):
+            repository.aggregate(principal, "deal", group_by="status", metric="sum")
+
+    def test_an_unknown_metric_is_rejected(self, principal):
+        with pytest.raises(query.FilterError):
+            repository.aggregate(principal, "deal", group_by="status", metric="median")
+
+    def test_summing_a_non_numeric_field_is_rejected(self, principal):
+        with pytest.raises(query.FilterError):
+            repository.aggregate(
+                principal, "deal", group_by="status", metric="sum", metric_field="status",
+            )
+
+    def test_admin_only_entity_requires_admin(self, org_id, member):
+        actor = permissions.load_principal(member)
+        with pytest.raises(permissions.PermissionDenied):
+            repository.aggregate(actor, "pipeline", group_by="name", metric="count")
+
+    def test_visibility_is_respected(self, org_id, principal, member):
+        """Same predicate `list_records()` applies -- an aggregate is still a
+        read, not a way around own/team visibility."""
+        repository.create(principal, "deal", {"name": "Admin's deal", "status": "open"})
+        role = users.create_role(org_id, "OwnDealsOnly")
+        users.set_role_scope(org_id, str(role["id"]), "deal", read_level="own")
+        users.assign_role(org_id, str(member["id"]), str(role["id"]))
+        actor = permissions.load_principal(member)
+
+        groups = repository.aggregate(actor, "deal", group_by="status", metric="count")
+        assert groups == []
+
+
 class TestCustomFields:
     def _declare(self, principal, key="renewal", kind="date"):
         return repository.create(

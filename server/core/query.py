@@ -145,6 +145,32 @@ def _lhs(spec: FieldSpec, alias: str) -> tuple[str, list[Any]]:
     return sql_expression(spec.kind, alias), [spec.custom_key]
 
 
+def field_expression(
+    entity: str, ref: str, *,
+    principal: Principal, custom_fields: Iterable[dict[str, Any]] = (), alias: str = "t",
+) -> Compiled:
+    """The raw SQL expression for one field, with its own bound parameters --
+    `compile_filter()`'s field-resolution step (spec lookup, filterable check,
+    read-permission check, real-column-or-custom-jsonb `_lhs()`) factored out
+    for a caller that wants the expression itself, not a comparison against
+    it. `repository.aggregate()`'s GROUP BY/metric expressions are the first
+    such caller, so a query-shaped need doesn't grow a second parser (R1).
+
+    Filterable, not just readable, is still the right gate here: an
+    unfilterable field is typically a `compute` field whose SQL expression
+    doesn't actually exist (`registry.verify()` enforces this pairing), so
+    grouping or aggregating by one would either error confusingly or (worse)
+    silently read the wrong column, exactly the failure `compile_filter()`
+    already guards against for a plain filter.
+    """
+    spec = registry.field_spec(entity, ref, custom_fields)
+    if not spec.filterable:
+        raise UnknownField(f"{ref} is not filterable")
+    permissions.require_field_readable(principal, entity, ref)
+    sql, params = _lhs(spec, alias)
+    return Compiled(sql, params)
+
+
 # ── Value coercion ───────────────────────────────────────────────────────────
 
 def _escape_like(value: str) -> str:

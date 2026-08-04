@@ -1480,3 +1480,44 @@ a.crm-home-tile:hover {
 .crm-home-task-overdue {
   color: var(--status-error);
 }
+
+.crm-home-stat-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin-top: 8px;
+}
+
+.crm-home-stat {
+  text-decoration: none;
+  color: inherit;
+  /* .crm-home-tile-wide (the wrapper this sits inside, for the "Deals by
+     status" tile) sets cursor:default so its OWN non-interactive wide tiles
+     ("My open tasks") don't look clickable -- cursor is inherited, so
+     without overriding it here, an actual working link would silently
+     lose its pointer affordance to a sibling tile's fix. */
+  cursor: pointer;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.crm-home-stat:hover {
+  background: var(--surface-raised);
+}
+
+.crm-home-stat-value {
+  font-size: calc(var(--fs-title) * 1.25);
+  font-weight: 700;
+}
+
+.crm-home-stat-label {
+  font-size: var(--fs-small);
+  color: var(--text-muted);
+  /* Matches .crm-record-board-lane-header's convention for the same
+     deal.status/stage vocabulary (every other transformed label in this
+     file is uppercase, not capitalize -- capitalize was the one-off here
+     and doesn't degrade safely for a multi-word closed-vocabulary value
+     like "sent_for_signature" elsewhere in the schema). */
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}

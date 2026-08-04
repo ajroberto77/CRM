@@ -286,6 +286,34 @@ class TestChildren:
         assert response.status_code == 401
 
 
+class TestAggregate:
+    def test_count_grouped_by_status(self, client, org_id, admin):
+        _login(client)
+        client.post("/records/deal", json={"name": "A", "status": "open"})
+        client.post("/records/deal", json={"name": "B", "status": "open"})
+        client.post("/records/deal", json={"name": "C", "status": "won"})
+
+        response = client.post(
+            "/records/deal/aggregate", json={"group_by": "status", "metric": "count"}
+        )
+        assert response.status_code == 200
+        by_key = {g["key"]: g["value"] for g in response.json()["groups"]}
+        assert by_key == {"open": 2, "won": 1}
+
+    def test_an_unknown_metric_is_400(self, client, org_id, admin):
+        _login(client)
+        response = client.post(
+            "/records/deal/aggregate", json={"group_by": "status", "metric": "median"}
+        )
+        assert response.status_code == 400
+
+    def test_unauthenticated_is_401(self, client, org_id, admin):
+        response = client.post(
+            "/records/deal/aggregate", json={"group_by": "status", "metric": "count"}
+        )
+        assert response.status_code == 401
+
+
 class TestPermissions:
     def test_unauthenticated_is_401(self, client, org_id, admin):
         response = client.get("/records/organization")
