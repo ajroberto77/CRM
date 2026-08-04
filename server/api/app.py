@@ -37,6 +37,10 @@ class RlsNotEnforced(RuntimeError):
     """Startup refuses to continue when tenant isolation is not real."""
 
 
+class RegistryInvalid(RuntimeError):
+    """Startup refuses to continue when an entity/field/role declaration is bad."""
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Populate the registry and let every installed module contribute its
@@ -47,6 +51,10 @@ async def lifespan(app: FastAPI):
     modules.install_enabled_modules()
 
     schema.migrate()
+
+    registry_problems = registry.verify(schema.all_tables())
+    if registry_problems:
+        raise RegistryInvalid(f"entity registry failed verification: {registry_problems}")
 
     problems = schema.verify_rls()
     if problems:

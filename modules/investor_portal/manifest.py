@@ -53,7 +53,7 @@ from datetime import date
 from typing import Any, Optional
 
 from server.core import events, permissions, registry, repository, settings as core_settings
-from server.core.registry import EntitySpec, FieldSpec, register
+from server.core.registry import EntitySpec, FieldSpec, register, spine
 
 MODULE = "investor_portal"
 
@@ -302,17 +302,23 @@ INDEXES: tuple[str, ...] = (
 )
 
 
-def _spine(extra: dict[str, FieldSpec]) -> dict[str, FieldSpec]:
-    base = {
-        "id": FieldSpec("id", "uuid", column="id", writable=False),
-        "owner_id": FieldSpec("owner_id", "uuid", column="owner_id", write_level="team"),
-        "created_at": FieldSpec("created_at", "datetime", column="created_at",
-                                writable=False),
-        "updated_at": FieldSpec("updated_at", "datetime", column="updated_at",
-                                writable=False),
-    }
-    base.update(extra)
-    return base
+def _investor_profile_display_label(record: dict, context: dict) -> str:
+    """"{subject type} — {status}" -- `status` alone titled every prospect's
+    page identically ("prospect"). A real cross-entity label ("Acme LLC —
+    verified") needs the subject's own name, which a per-row `compute` can't
+    fetch (no DB access, one shared `context` per request, not per row) --
+    Phase 2's reference-labels endpoint resolves that in the UI instead."""
+    subject = str(record.get("subject_type") or "investor").capitalize()
+    status = str(record.get("status") or "").replace("_", " ")
+    return f"{subject} — {status}" if status else subject
+
+
+def _investor_mandate_display_label(record: dict, context: dict) -> str:
+    """Same reasoning as `_investor_profile_display_label` above -- `source`
+    alone titled every mandate identically ("response")."""
+    subject = str(record.get("subject_type") or "mandate").capitalize()
+    source = str(record.get("source") or "")
+    return f"{subject} mandate ({source})" if source else f"{subject} mandate"
 
 
 class SubscriptionAgreementMissing(repository.ValidationError):
@@ -535,7 +541,7 @@ def install() -> None:
         label="Investor categories", module=MODULE,
         label_field="label", admin_only=True, supports_custom_fields=False,
         default_sort=(("sort_order", "asc"),),
-        fields=_spine({
+        fields=spine({
             "key": FieldSpec("key", "text", column="key", required=True),
             "label": FieldSpec("label", "text", column="label", required=True),
             "requires_verification": FieldSpec(
@@ -550,7 +556,7 @@ def install() -> None:
         label="Investment pathways", module=MODULE,
         label_field="label", admin_only=True,
         default_sort=(("sort_order", "asc"),), searchable=("label",),
-        fields=_spine({
+        fields=spine({
             "key": FieldSpec("key", "text", column="key", required=True),
             "label": FieldSpec("label", "text", column="label", required=True),
             "description": FieldSpec("description", "text", column="description"),
@@ -566,10 +572,21 @@ def install() -> None:
     register(EntitySpec(
         name="pathway_vehicle", table="core.pathway_vehicles",
         label="Pathway vehicles", module=MODULE,
+        # A pure join row (pathway x fund) -- reached from the pathway it
+        # belongs to, not its own nav entry, per the design audit's "pure
+        # join/child row" call (matches contact_channel's same treatment).
+        # label_field stays `fund_id` for now -- Phase 2's reference-labels
+        # endpoint resolves it to a real name independent of label_field;
+        # a composed "{pathway} -> {fund}" label needs a cross-entity lookup
+        # `compute` cannot do (it sees only this row's own columns), so it's
+        # deferred there rather than faked here.
         label_field="fund_id", admin_only=True, supports_custom_fields=False,
-        fields=_spine({
-            "pathway_id": FieldSpec("pathway_id", "uuid", column="pathway_id", required=True),
-            "fund_id": FieldSpec("fund_id", "uuid", column="fund_id", required=True),
+        nav="none",
+        fields=spine({
+            "pathway_id": FieldSpec("pathway_id", "uuid", column="pathway_id", required=True,
+                                    label="Pathway", references="investment_pathway"),
+            "fund_id": FieldSpec("fund_id", "uuid", column="fund_id", required=True,
+                                 label="Fund", references="fund"),
             "added_at": FieldSpec("added_at", "date", column="added_at"),
         }),
     ))
@@ -577,14 +594,23 @@ def install() -> None:
     register(EntitySpec(
         name="investor_profile", table="core.investor_profiles",
         label="Investor profiles", module=MODULE,
-        label_field="status",
-        fields=_spine({
+        label_field="display_label",
+        # searchable must stay non-empty since label_field is computed
+        # (registry.verify()'s pairing rule) -- subject_type is a real,
+        # filterable column, even though the useful cross-entity search
+        # (by the subject's own name) is Phase 2's job, not this field's.
+        searchable=("subject_type",),
+        nav_group="Investors", nav_order=10,
+        list_columns=("display_label", "category_id", "accreditation_expires_at"),
+        fields=spine({
             "subject_type": FieldSpec("subject_type", "text", column="subject_type",
                                       required=True),
             "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
-                                    required=True),
-            "category_id": FieldSpec("category_id", "uuid", column="category_id"),
-            "pathway_id": FieldSpec("pathway_id", "uuid", column="pathway_id"),
+                                    required=True, references_type_field="subject_type"),
+            "category_id": FieldSpec("category_id", "uuid", column="category_id",
+                                     label="Category", references="investor_category"),
+            "pathway_id": FieldSpec("pathway_id", "uuid", column="pathway_id",
+                                    label="Pathway", references="investment_pathway"),
             "status": FieldSpec("status", "select", column="status", options=(
                 "prospect", "questionnaire_sent", "questionnaire_complete",
                 "self_accredited", "verified", "active", "lapsed", "declined",
@@ -600,6 +626,9 @@ def install() -> None:
                 "relationship_since", "date", column="relationship_since"),
             "check_min": FieldSpec("check_min", "currency", column="check_min"),
             "check_max": FieldSpec("check_max", "currency", column="check_max"),
+            "display_label": FieldSpec("display_label", "text", filterable=False,
+                                       sortable=False, writable=False,
+                                       compute=_investor_profile_display_label),
         }),
     ))
 
@@ -608,7 +637,7 @@ def install() -> None:
         label="Questionnaires", module=MODULE,
         label_field="name", admin_only=True, supports_custom_fields=False,
         searchable=("name",),
-        fields=_spine({
+        fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
             "version": FieldSpec("version", "number", column="version", required=True),
             "question_schema": FieldSpec(
@@ -624,16 +653,21 @@ def install() -> None:
         name="questionnaire_response", table="core.questionnaire_responses",
         label="Questionnaire responses", module=MODULE,
         label_field="submitted_at", supports_custom_fields=False,
-        fields=_spine({
+        # Reached from the subject record or from the questionnaire whose
+        # version it answers -- nobody browses "all responses" as a list
+        # (design audit).
+        nav="none",
+        fields=spine({
             "questionnaire_id": FieldSpec(
-                "questionnaire_id", "uuid", column="questionnaire_id", required=True),
+                "questionnaire_id", "uuid", column="questionnaire_id", required=True,
+                label="Questionnaire", references="questionnaire"),
             "questionnaire_version": FieldSpec(
                 "questionnaire_version", "number", column="questionnaire_version",
                 required=True),
             "subject_type": FieldSpec("subject_type", "text", column="subject_type",
                                       required=True),
             "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
-                                    required=True),
+                                    required=True, references_type_field="subject_type"),
             "answers": FieldSpec("answers", "jsonb", column="answers",
                                  filterable=False, sortable=False, required=True),
             "submitted_at": FieldSpec(
@@ -646,12 +680,16 @@ def install() -> None:
     register(EntitySpec(
         name="investor_mandate", table="core.investor_mandates",
         label="Investor mandates", module=MODULE,
-        label_field="source", supports_custom_fields=False,
-        fields=_spine({
+        label_field="display_label", supports_custom_fields=False,
+        searchable=("subject_type",),
+        # Unique per subject (uq_investor_mandates_org_subject) -- an
+        # extension of the investor record, not a peer object to browse.
+        nav="none",
+        fields=spine({
             "subject_type": FieldSpec("subject_type", "text", column="subject_type",
                                       required=True),
             "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
-                                    required=True),
+                                    required=True, references_type_field="subject_type"),
             "source": FieldSpec("source", "select", column="source",
                                 options=("response", "human", "ai")),
             "confidence": FieldSpec("confidence", "number", column="confidence"),
@@ -675,9 +713,13 @@ def install() -> None:
             # different response. The derivation subscriber below sets it on
             # every auto-derive; nothing requires it to be the only writer.
             "derived_from_response_id": FieldSpec(
-                "derived_from_response_id", "uuid", column="derived_from_response_id"),
+                "derived_from_response_id", "uuid", column="derived_from_response_id",
+                label="Derived from response", references="questionnaire_response"),
             "reviewed_by": FieldSpec("reviewed_by", "uuid", column="reviewed_by"),
             "reviewed_at": FieldSpec("reviewed_at", "datetime", column="reviewed_at"),
+            "display_label": FieldSpec("display_label", "text", filterable=False,
+                                       sortable=False, writable=False,
+                                       compute=_investor_mandate_display_label),
         }),
     ))
 

@@ -34,6 +34,7 @@ from server.core.registry import (
     FieldSpec,
     register,
     register_role,
+    spine,
 )
 
 MODULE = "funds"
@@ -225,17 +226,19 @@ INDEXES: tuple[str, ...] = (
 )
 
 
-def _spine(extra: dict[str, FieldSpec]) -> dict[str, FieldSpec]:
-    base = {
-        "id": FieldSpec("id", "uuid", column="id", writable=False),
-        "owner_id": FieldSpec("owner_id", "uuid", column="owner_id", write_level="team"),
-        "created_at": FieldSpec("created_at", "datetime", column="created_at",
-                                writable=False),
-        "updated_at": FieldSpec("updated_at", "datetime", column="updated_at",
-                                writable=False),
-    }
-    base.update(extra)
-    return base
+def _commitment_display_label(record: dict, context: dict) -> str:
+    """"{amount} {currency}" -- replacing the raw `amount` label_field a
+    design audit found rendering commitment pages titled e.g. "250000" with
+    no currency. No context_builder needed."""
+    amount = record.get("amount")
+    currency = record.get("currency") or ""
+    if amount is None:
+        return currency or "Commitment"
+    try:
+        formatted = f"{float(amount):,.2f}"
+    except (TypeError, ValueError):
+        formatted = str(amount)
+    return f"{formatted} {currency}".strip()
 
 
 def _seed_gp_roles(org_id: str) -> None:
@@ -255,9 +258,12 @@ def install() -> None:
     register(EntitySpec(
         name="fund", table="core.funds", label="Funds", module=MODULE,
         label_field="name", searchable=("name", "strategy"),
-        fields=_spine({
+        nav_group="Investing", nav_order=10,
+        list_columns=("name", "strategy", "status", "target_size", "final_close_at"),
+        fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
-            "entity_org_id": FieldSpec("entity_org_id", "uuid", column="entity_org_id"),
+            "entity_org_id": FieldSpec("entity_org_id", "uuid", column="entity_org_id",
+                                       label="Legal entity", references="organization"),
             "vintage_year": FieldSpec("vintage_year", "number", column="vintage_year"),
             "strategy": FieldSpec("strategy", "text", column="strategy"),
             "currency": FieldSpec("currency", "text", column="currency"),
@@ -272,21 +278,37 @@ def install() -> None:
 
     register(EntitySpec(
         name="commitment", table="core.commitments", label="Commitments",
-        module=MODULE, label_field="amount",
+        module=MODULE, label_field="display_label",
         default_sort=(("committed_at", "desc"),),
-        fields=_spine({
-            "fund_id": FieldSpec("fund_id", "uuid", column="fund_id", required=True),
+        # "amount" alone titled a commitment page e.g. "250000" with no
+        # currency and no fund -- searchable must stay non-empty per
+        # registry.verify()'s pairing rule for a computed label_field.
+        searchable=("currency",),
+        nav_group="Investing", nav_order=30,
+        list_columns=("display_label", "fund_id", "status", "committed_at"),
+        fields=spine({
+            "fund_id": FieldSpec("fund_id", "uuid", column="fund_id", required=True,
+                                 label="Fund", references="fund"),
             "investment_account_id": FieldSpec("investment_account_id", "uuid",
-                                               column="investment_account_id"),
+                                               column="investment_account_id",
+                                               label="Investment account",
+                                               references="investment_account"),
             "investor_org_id": FieldSpec("investor_org_id", "uuid",
-                                         column="investor_org_id"),
+                                         column="investor_org_id",
+                                         label="Investor (company)",
+                                         references="organization"),
             "investor_person_id": FieldSpec("investor_person_id", "uuid",
-                                            column="investor_person_id"),
+                                            column="investor_person_id",
+                                            label="Investor (person)",
+                                            references="person"),
             "amount": FieldSpec("amount", "currency", column="amount"),
             "currency": FieldSpec("currency", "text", column="currency"),
             "committed_at": FieldSpec("committed_at", "date", column="committed_at"),
             "status": FieldSpec("status", "select", column="status",
                                 options=("soft", "signed", "closed", "withdrawn")),
+            "display_label": FieldSpec("display_label", "text", filterable=False,
+                                       sortable=False, writable=False,
+                                       compute=_commitment_display_label),
         }),
     ))
 
@@ -294,10 +316,14 @@ def install() -> None:
         name="investment_account", table="core.investment_accounts",
         label="Investment accounts", module=MODULE,
         label_field="name", searchable=("name",),
-        fields=_spine({
+        nav_group="Investing", nav_order=20,
+        list_columns=("name", "account_type", "status", "domicile_country"),
+        fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
-            "entity_org_id": FieldSpec("entity_org_id", "uuid", column="entity_org_id"),
-            "person_id": FieldSpec("person_id", "uuid", column="person_id"),
+            "entity_org_id": FieldSpec("entity_org_id", "uuid", column="entity_org_id",
+                                       label="Legal entity", references="organization"),
+            "person_id": FieldSpec("person_id", "uuid", column="person_id",
+                                   label="Person", references="person"),
             "account_type": FieldSpec("account_type", "select", column="account_type",
                                       options=ACCOUNT_TYPES),
             "domicile_country": FieldSpec("domicile_country", "text",
@@ -313,7 +339,7 @@ def install() -> None:
         name="gp_role", table="core.gp_roles", label="GP roles", module=MODULE,
         label_field="label", admin_only=True, supports_custom_fields=False,
         default_sort=(("sort_order", "asc"),),
-        fields=_spine({
+        fields=spine({
             "key": FieldSpec("key", "text", column="key", required=True),
             "label": FieldSpec("label", "text", column="label", required=True),
             "is_enabled": FieldSpec("is_enabled", "boolean", column="is_enabled"),
@@ -330,24 +356,30 @@ def install() -> None:
     # NEW `lp_in` edge may name on the "from" side).
     register_role(AssociationRole(
         "lp_in", ("organization", "person", "investment_account"), ("fund",),
-        inverse_label="investors", module=MODULE))
+        inverse_label="investors", module=MODULE,
+        label="LP in", group="Investing", group_order=50))
     register_role(AssociationRole(
         "gp_of", ("organization", "person"), ("fund",),
-        inverse_label="general partners", module=MODULE))
+        inverse_label="general partners", module=MODULE,
+        label="GP of", group="Investing", group_order=50))
     register_role(AssociationRole(
         "portfolio_of", ("organization",), ("fund",),
-        inverse_label="portfolio", module=MODULE))
+        inverse_label="portfolio", module=MODULE,
+        label="Portfolio of", group="Investing", group_order=50))
     # Symmetric: canonicalized on write so A/B and B/A cannot both exist and
     # every co-investment is not counted twice.
     register_role(AssociationRole(
         "co_investor_in", ("organization",), ("organization",),
-        inverse_label="co-investors", symmetric=True, module=MODULE))
+        inverse_label="co-investors", symmetric=True, module=MODULE,
+        label="Co-investor in", group="Investing", group_order=50))
     register_role(AssociationRole(
         "lender_to", ("organization",), ("organization",),
-        inverse_label="lenders", module=MODULE))
+        inverse_label="lenders", module=MODULE,
+        label="Lender to", group="Commercial", group_order=60))
     register_role(AssociationRole(
         "acquirer_of", ("organization",), ("organization",),
-        inverse_label="acquired by", module=MODULE))
+        inverse_label="acquired by", module=MODULE,
+        label="Acquirer of", group="Commercial", group_order=60))
     # The investment-relationship rollup -- deliberately NOT legal-entity-
     # based, unlike core's `owned_by` (Goldman's advisory and investment-
     # advisory arms are separate legal entities but can roll up under one
@@ -359,7 +391,8 @@ def install() -> None:
     # concept.
     register_role(AssociationRole(
         "rolls_up_to", ("organization", "investment_account"), ("organization",),
-        inverse_label="rolls up from", hierarchical=True, module=MODULE))
+        inverse_label="rolls up from", hierarchical=True, module=MODULE,
+        label="Rolls up to", group="Rollup", group_order=20))
 
     # Roles at the GP level (person -> organization). `principal_of` is
     # deliberately the only one that carries a functional title, via
@@ -374,7 +407,8 @@ def install() -> None:
     # no `owner_id` and are excluded from `visibility_predicate()`.
     register_role(AssociationRole(
         "principal_of", ("person",), ("organization",),
-        inverse_label="principals", module=MODULE))
+        inverse_label="principals", module=MODULE,
+        label="Principal of", group="Governance & signing", group_order=40))
     # No separate `beneficial_owner_of` role: core's `owned_by` already
     # covers a person owning an organization directly (its own docstring
     # names exactly this GP-with-no-corporate-parent case), including the
@@ -390,17 +424,21 @@ def install() -> None:
     # the GP or on a specific account, and it's one concept, not two.
     register_role(AssociationRole(
         "authorized_signer_for", ("person",), ("organization", "investment_account"),
-        inverse_label="authorized signers", module=MODULE))
+        inverse_label="authorized signers", module=MODULE,
+        label="Authorized signer for", group="Governance & signing", group_order=40))
 
     # Roles at the account level (person -> investment_account).
     register_role(AssociationRole(
         "account_holder_of", ("person",), ("investment_account",),
-        inverse_label="account holders", module=MODULE))
+        inverse_label="account holders", module=MODULE,
+        label="Account holder of", group="Account parties", group_order=45))
     register_role(AssociationRole(
         "trustee_of", ("person",), ("investment_account",),
-        inverse_label="trustees", module=MODULE))
+        inverse_label="trustees", module=MODULE,
+        label="Trustee of", group="Account parties", group_order=45))
     register_role(AssociationRole(
         "beneficiary_of", ("person",), ("investment_account",),
-        inverse_label="beneficiaries", module=MODULE))
+        inverse_label="beneficiaries", module=MODULE,
+        label="Beneficiary of", group="Account parties", group_order=45))
 
     registry.register_org_seed(_seed_gp_roles, module=MODULE)

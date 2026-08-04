@@ -81,6 +81,19 @@ class FieldSpec:
     writable: bool = True
     required: bool = False
     options: tuple[str, ...] = ()
+    # Human label for this field ("" -> the frontend derives one from `name`,
+    # e.g. "fund_id" -> "fund id" -- every current UI does this in four
+    # separate places; this is the one place a real label lives instead).
+    label: str = ""
+    # The registered entity this field's value points at, when `kind == "uuid"`
+    # and the target is fixed (e.g. `commitment.fund_id` always references
+    # `fund`). At most one of `references`/`references_type_field` is set.
+    references: Optional[str] = None
+    # For a polymorphic reference (e.g. `task.subject_id`, whose target varies
+    # per row), the name of the sibling FieldSpec that holds the target entity
+    # name for that row (e.g. "subject_type"). At most one of
+    # `references`/`references_type_field` is set.
+    references_type_field: Optional[str] = None
     # Visibility level a principal needs to write this field. `owner_id`
     # declares "team": otherwise a user at `own` level can reassign a record
     # away from themselves (losing it) or to themselves (stealing it).
@@ -141,6 +154,24 @@ class EntitySpec:
     # per returned record. None for every entity with no computed
     # fields, which is most of them.
     context_builder: Optional[Callable[["Principal"], dict[str, Any]]] = None
+    # Where this entity appears in the sidebar. "" derives a default at
+    # registration-adjacent read time (verify() enforces the closed
+    # vocabulary; Shell.tsx/the /records endpoint derive "" -> "settings" for
+    # an admin_only entity, else "primary"): "primary" (top-level nav item),
+    # "settings" (lives under the Settings shell), "none" (reached only from
+    # a parent record -- a pure join/child row like `pathway_vehicle` or
+    # `contact_channel`, never its own nav entry).
+    nav: str = ""
+    # Sidebar section label ("" = the unlabeled top block). A module names
+    # its own group ("Investing", "Investors") in its own manifest -- core
+    # never learns a vertical's grouping (R6).
+    nav_group: str = ""
+    nav_order: int = 100
+    # Curated default table columns, in order. () means "derive one" (today's
+    # behavior: every field but id/owner_id/created_at) -- set explicitly for
+    # any entity whose full field list is the wrong table (a jsonb blob, a
+    # pile of uuid FKs with no label yet).
+    list_columns: tuple[str, ...] = ()
 
     def field(self, name: str) -> FieldSpec:
         spec = self.fields.get(name)
@@ -171,6 +202,16 @@ class AssociationRole:
     symmetric: bool = False
     hierarchical: bool = False
     module: str = "core"
+    # Human label for the outbound direction ("" -> the frontend falls back
+    # to `name.replace("_", " ")`, today's only behavior). `inverse_label`
+    # above is already the inbound-direction label; this is its counterpart.
+    label: str = ""
+    # Which section of the related-records panel this role's edges render
+    # under (e.g. "Governance & signing", "Investing"). "" falls back to the
+    # role's own `module` name, so an unsectioned role still groups instead
+    # of scattering into one block per role.
+    group: str = ""
+    group_order: int = 100
 
 
 # ── The singleton ────────────────────────────────────────────────────────────
@@ -430,6 +471,9 @@ def field_spec(entity_name: str, ref: str, custom: Iterable[dict[str, Any]] = ()
 
 # ── Startup verification ─────────────────────────────────────────────────────
 
+_NAV_VALUES = ("", "primary", "settings", "none")
+
+
 def verify(tables: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
     """Check every registration against the real schema. Empty list means sound.
 
@@ -439,6 +483,8 @@ def verify(tables: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
     on whichever request first selected it.
     """
     problems: list[dict[str, Any]] = []
+    known = set(entities())
+
     for spec in all_entities():
         columns = tables.get(spec.table)
         if columns is None:
@@ -456,6 +502,25 @@ def verify(tables: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
             if fspec.column and fspec.column not in columns:
                 problems.append({"entity": spec.name, "problem": "column_missing",
                                  "field": name, "column": fspec.column})
+            # A `compute` field has no `column`/`custom_key`, so leaving it
+            # filterable/sortable (the dataclass default) makes the filter
+            # compiler's `_lhs()` fall through to the custom-field branch and
+            # emit `core.jsonb_text(t.custom, NULL)` -- silently wrong SQL
+            # against a column that doesn't hold the value, not an error.
+            # `deal.rotting` gets this right by hand; enforce it for every
+            # future compute field instead of trusting each caller to notice.
+            if fspec.compute is not None and (fspec.filterable or fspec.sortable):
+                problems.append({"entity": spec.name, "problem": "computed_field_filterable",
+                                 "field": name})
+            if fspec.references is not None and fspec.references_type_field is not None:
+                problems.append({"entity": spec.name, "problem": "field_has_both_reference_kinds",
+                                 "field": name})
+            if fspec.references is not None and fspec.references not in known:
+                problems.append({"entity": spec.name, "problem": "reference_unknown_entity",
+                                 "field": name, "references": fspec.references})
+            if fspec.references_type_field is not None and fspec.references_type_field not in spec.fields:
+                problems.append({"entity": spec.name, "problem": "reference_type_field_missing",
+                                 "field": name, "references_type_field": fspec.references_type_field})
         for field_name, direction in spec.default_sort:
             if field_name not in spec.fields:
                 problems.append({"entity": spec.name, "problem": "sort_field_missing",
@@ -463,8 +528,23 @@ def verify(tables: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
             if direction not in ("asc", "desc"):
                 problems.append({"entity": spec.name, "problem": "bad_sort_direction",
                                  "direction": direction})
+        if spec.label_field not in spec.fields:
+            problems.append({"entity": spec.name, "problem": "label_field_missing",
+                             "field": spec.label_field})
+        elif spec.fields[spec.label_field].compute is not None and not spec.searchable:
+            # A computed label_field is unfilterable (enforced above), so
+            # EntityListPage's own fallback -- filter on `searchable`, or on
+            # `[label_field]` when `searchable` is empty (EntityListPage.tsx:33)
+            # -- would try to filter directly on the computed field. Requiring
+            # a real `searchable` whenever label_field is computed closes that.
+            problems.append({"entity": spec.name, "problem": "computed_label_field_needs_searchable"})
+        for col in spec.list_columns:
+            if col not in spec.fields:
+                problems.append({"entity": spec.name, "problem": "list_column_missing",
+                                 "field": col})
+        if spec.nav not in _NAV_VALUES:
+            problems.append({"entity": spec.name, "problem": "bad_nav", "nav": spec.nav})
 
-    known = set(entities())
     for role_spec in roles():
         for side in role_spec.from_types + role_spec.to_types:
             if side not in known:
@@ -482,7 +562,7 @@ def verify(tables: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
 
 # ── Core entities ────────────────────────────────────────────────────────────
 
-def _spine(extra: dict[str, FieldSpec]) -> dict[str, FieldSpec]:
+def spine(extra: dict[str, FieldSpec]) -> dict[str, FieldSpec]:
     """The columns every record entity carries. Declared once here rather than
     repeated per entity (R1)."""
     base = {
@@ -542,6 +622,22 @@ def _deal_rotting(record: dict[str, Any], context: dict[str, Any]) -> bool:
     return datetime.now(timezone.utc) - last_activity > timedelta(days=threshold_days)
 
 
+# `interaction.display_label` -- a computed title, replacing the raw
+# `subject_hash` a design audit found rendering literally as a hash in every
+# table/detail title. No context_builder needed (nothing per-org to look up).
+def _interaction_display_label(record: dict[str, Any], context: dict[str, Any]) -> str:
+    kind = str(record.get("kind") or "interaction").capitalize()
+    occurred = record.get("occurred_at")
+    if isinstance(occurred, str):
+        try:
+            occurred = datetime.fromisoformat(occurred)
+        except ValueError:
+            occurred = None
+    if isinstance(occurred, datetime):
+        return f"{kind} — {occurred.strftime('%b %d, %Y')}"
+    return kind
+
+
 def register_core_entities() -> None:
     """Declare the domain-neutral core. Idempotent."""
     # Local import: registry.py stays a foundational module with no runtime
@@ -552,7 +648,9 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="organization", table="core.organizations", label="Companies",
         label_field="name", searchable=("name", "domain"),
-        fields=_spine({
+        nav_order=10,
+        list_columns=("name", "domain", "domicile_country", "is_internal"),
+        fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
             "domain": FieldSpec("domain", "text", column="domain"),
             "description": FieldSpec("description", "text", column="description"),
@@ -570,7 +668,9 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="person", table="core.persons", label="People",
         label_field="full_name", searchable=("full_name", "primary_email"),
-        fields=_spine({
+        nav_order=20,
+        list_columns=("full_name", "title", "primary_email", "tax_residence_country"),
+        fields=spine({
             "full_name": FieldSpec("full_name", "text", column="full_name", required=True),
             "title": FieldSpec("title", "text", column="title"),
             "primary_email": FieldSpec("primary_email", "email", column="primary_email",
@@ -593,7 +693,7 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="pipeline", table="core.pipelines", label="Pipelines",
         label_field="name", admin_only=True, supports_custom_fields=False,
-        fields=_spine({
+        fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
             "stages": FieldSpec("stages", "jsonb", column="stages", filterable=False,
                                 sortable=False),
@@ -603,7 +703,7 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="trusted_sender", table="core.trusted_senders", label="Trusted Senders",
         label_field="pattern", admin_only=True, supports_custom_fields=False,
-        fields=_spine({
+        fields=spine({
             "pattern": FieldSpec("pattern", "text", column="pattern", required=True),
             "label": FieldSpec("label", "text", column="label"),
             "note": FieldSpec("note", "text", column="note"),
@@ -614,9 +714,12 @@ def register_core_entities() -> None:
         name="deal", table="core.deals", label="Deals",
         label_field="name", searchable=("name",),
         context_builder=_deal_rotting_context,
-        fields=_spine({
+        nav_order=30,
+        list_columns=("name", "stage", "amount", "status", "rotting"),
+        fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
-            "pipeline_id": FieldSpec("pipeline_id", "uuid", column="pipeline_id"),
+            "pipeline_id": FieldSpec("pipeline_id", "uuid", column="pipeline_id",
+                                     label="Pipeline", references="pipeline"),
             "stage": FieldSpec("stage", "text", column="stage"),
             "amount": FieldSpec("amount", "currency", column="amount"),
             "currency": FieldSpec("currency", "text", column="currency"),
@@ -635,24 +738,30 @@ def register_core_entities() -> None:
         name="task", table="core.tasks", label="Tasks",
         label_field="title", searchable=("title",),
         default_sort=(("due_on", "asc"), ("updated_at", "desc")),
-        fields=_spine({
+        nav_order=40,
+        list_columns=("title", "status", "due_on", "subject_type"),
+        fields=spine({
             "title": FieldSpec("title", "text", column="title", required=True),
             "body": FieldSpec("body", "text", column="body"),
             "due_on": FieldSpec("due_on", "date", column="due_on"),
             "status": FieldSpec("status", "select", column="status",
                                 options=("open", "done", "cancelled")),
             "subject_type": FieldSpec("subject_type", "text", column="subject_type"),
-            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id"),
+            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
+                                    references_type_field="subject_type"),
         }),
     ))
 
     register(EntitySpec(
         name="note", table="core.notes", label="Notes",
         label_field="body", searchable=("body",),
-        fields=_spine({
+        nav_group="Activity", nav_order=30,
+        list_columns=("body", "subject_type", "updated_at"),
+        fields=spine({
             "body": FieldSpec("body", "text", column="body", required=True),
             "subject_type": FieldSpec("subject_type", "text", column="subject_type"),
-            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id"),
+            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
+                                    references_type_field="subject_type"),
         }),
     ))
 
@@ -664,9 +773,12 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="document", table="core.documents", label="Documents",
         label_field="filename", searchable=("filename", "kind"),
-        fields=_spine({
+        nav_group="Activity", nav_order=20,
+        list_columns=("filename", "kind", "status", "valid_until"),
+        fields=spine({
             "subject_type": FieldSpec("subject_type", "text", column="subject_type"),
-            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id"),
+            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
+                                    references_type_field="subject_type"),
             "kind": FieldSpec("kind", "text", column="kind"),
             "filename": FieldSpec("filename", "text", column="filename"),
             "storage_key": FieldSpec("storage_key", "text", column="storage_key",
@@ -700,9 +812,11 @@ def register_core_entities() -> None:
     # (a sync job), which gets a clear constraint violation if it omits one.
     register(EntitySpec(
         name="interaction", table="core.interactions", label="Interactions",
-        label_field="subject_hash", searchable=("thread_id", "from_channel"),
+        label_field="display_label", searchable=("thread_id", "from_channel"),
         default_sort=(("occurred_at", "desc"),),
-        fields=_spine({
+        nav_group="Activity", nav_order=10,
+        list_columns=("display_label", "direction", "occurred_at", "thread_id"),
+        fields=spine({
             "owner_id": FieldSpec("owner_id", "uuid", column="owner_id",
                                   write_level="team"),
             "account_id": FieldSpec("account_id", "uuid", column="account_id"),
@@ -720,6 +834,15 @@ def register_core_entities() -> None:
             "external_id": FieldSpec("external_id", "text", column="external_id"),
             "source": FieldSpec("source", "select", column="source", writable=False,
                                 options=("human", "sync", "ai")),
+            # Computed, not stored -- `subject_hash` is a dedup key, not a
+            # title (raw UUID/hash, per the design audit that motivated this
+            # field). "Email — Aug 4, 2026" reads; a hash doesn't. Same
+            # compute/context_builder mechanism as `deal.rotting`, and the
+            # `filterable=False, sortable=False` + non-empty `searchable`
+            # pairing verify() now enforces for any computed label_field.
+            "display_label": FieldSpec("display_label", "text", filterable=False,
+                                       sortable=False, writable=False,
+                                       compute=_interaction_display_label),
         }),
     ))
 
@@ -733,8 +856,13 @@ def register_core_entities() -> None:
         name="contact_channel", table="core.contact_channels",
         label="Contact channels", label_field="value_normalized",
         searchable=("value_normalized", "value_raw"),
-        fields=_spine({
-            "person_id": FieldSpec("person_id", "uuid", column="person_id", required=True),
+        # A person's own email/phone list, not a nav-worthy object in its own
+        # right -- reached from the person record, per the design audit's
+        # "pure join/child row" call.
+        nav="none",
+        fields=spine({
+            "person_id": FieldSpec("person_id", "uuid", column="person_id", required=True,
+                                   label="Person", references="person"),
             "kind": FieldSpec("kind", "select", column="kind",
                               options=("email", "phone", "signal", "telegram", "handle")),
             "value_normalized": FieldSpec("value_normalized", "text",
@@ -748,9 +876,12 @@ def register_core_entities() -> None:
         name="metric_fact", table="core.metric_facts", label="Metrics",
         label_field="metric_key", searchable=("metric_key",),
         default_sort=(("period_start", "desc"),),
-        fields=_spine({
+        nav_group="Activity", nav_order=40,
+        list_columns=("metric_key", "value_numeric", "period_start", "subject_type"),
+        fields=spine({
             "subject_type": FieldSpec("subject_type", "text", column="subject_type"),
-            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id"),
+            "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
+                                    references_type_field="subject_type"),
             "period_start": FieldSpec("period_start", "date", column="period_start"),
             "period_end": FieldSpec("period_end", "date", column="period_end"),
             "metric_key": FieldSpec("metric_key", "text", column="metric_key",
@@ -761,7 +892,8 @@ def register_core_entities() -> None:
             "source": FieldSpec("source", "select", column="source",
                                 options=("human", "sync", "ai")),
             "confidence": FieldSpec("confidence", "number", column="confidence"),
-            "document_id": FieldSpec("document_id", "uuid", column="document_id"),
+            "document_id": FieldSpec("document_id", "uuid", column="document_id",
+                                     label="Document", references="document"),
         }),
     ))
 
@@ -774,8 +906,12 @@ def register_core_entities() -> None:
         name="proposed_change", table="core.proposed_changes", label="Proposals",
         label_field="kind", supports_custom_fields=False,
         default_sort=(("created_at", "desc"),),
-        fields=_spine({
-            # _spine()'s default owner_id is writable at "team" level, but
+        # The real approve/decline flow is the dedicated Pending Proposals
+        # page (server/api/proposals.py), not this generic list -- every
+        # field here is writable=False, so a generic entry is a dead end.
+        nav="none",
+        fields=spine({
+            # spine()'s default owner_id is writable at "team" level, but
             # every field here must be writable=False (server/api/proposals.py's
             # own docstring says so) -- proposals.py's CAS functions are the
             # only mutation path, and create() is the only place owner_id
@@ -784,7 +920,7 @@ def register_core_entities() -> None:
             "subject_type": FieldSpec("subject_type", "text", column="subject_type",
                                       writable=False),
             "subject_id": FieldSpec("subject_id", "uuid", column="subject_id",
-                                    writable=False),
+                                    writable=False, references_type_field="subject_type"),
             "kind": FieldSpec("kind", "text", column="kind", writable=False),
             "payload": FieldSpec("payload", "jsonb", column="payload",
                                  filterable=False, sortable=False, writable=False),
@@ -811,7 +947,11 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="saved_view", table="core.saved_views", label="Views",
         label_field="name", supports_custom_fields=False,
-        fields=_spine({
+        # The nav mechanism itself (nested under each object per
+        # DESIGN.md:222, Phase 7) -- browsing it as its own top-level list
+        # would be circular.
+        nav="none",
+        fields=spine({
             "entity": FieldSpec("entity", "text", column="entity", required=True),
             "name": FieldSpec("name", "text", column="name", required=True),
             "kind": FieldSpec("kind", "select", column="kind",
@@ -830,7 +970,7 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="custom_field", table="core.custom_fields", label="Custom fields",
         label_field="label", admin_only=True, supports_custom_fields=False,
-        fields=_spine({
+        fields=spine({
             "entity": FieldSpec("entity", "text", column="entity", required=True),
             "key": FieldSpec("key", "text", column="key", required=True),
             "label": FieldSpec("label", "text", column="label"),
@@ -852,16 +992,21 @@ def _register_core_roles() -> None:
     """Domain-neutral relationship roles. `modules/funds` adds `lp_in`,
     `portfolio_of`, `co_investor_in` and the rest through register_role()."""
     register_role(AssociationRole(
-        "works_at", ("person",), ("organization",), inverse_label="employs"))
+        "works_at", ("person",), ("organization",), inverse_label="employs",
+        label="Works at", group="People", group_order=30))
     register_role(AssociationRole(
-        "board_member_of", ("person",), ("organization",), inverse_label="board members"))
+        "board_member_of", ("person",), ("organization",), inverse_label="board members",
+        label="Board member of", group="People", group_order=30))
     register_role(AssociationRole(
-        "advisor_to", ("person",), ("organization", "person"), inverse_label="advisors"))
+        "advisor_to", ("person",), ("organization", "person"), inverse_label="advisors",
+        label="Advisor to", group="People", group_order=30))
     register_role(AssociationRole(
         "introduced_by", ("person", "organization"), ("person",),
-        inverse_label="introductions"))
+        inverse_label="introductions",
+        label="Introduced by", group="People", group_order=30))
     register_role(AssociationRole(
-        "vendor_to", ("organization",), ("organization",), inverse_label="vendors"))
+        "vendor_to", ("organization",), ("organization",), inverse_label="vendors",
+        label="Vendor to", group="Commercial", group_order=60))
     # Legal/corporate ownership -- the Ultimate Parent Company hierarchy.
     # `from` is the owned org (the child), `to` is the owner (an org or a
     # person -- a GP with no corporate parent is routinely owned directly by
@@ -876,4 +1021,5 @@ def _register_core_roles() -> None:
     # concepts, hence two roles.
     register_role(AssociationRole(
         "owned_by", ("organization",), ("organization", "person"),
-        inverse_label="owns", hierarchical=True))
+        inverse_label="owns", hierarchical=True,
+        label="Owned by", group="Ownership", group_order=10))
