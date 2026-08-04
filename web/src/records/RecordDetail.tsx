@@ -1,17 +1,12 @@
-import { useCallback, useEffect, useState } from 'react'
-import { apiDelete, apiGet, apiPatch, ApiError } from '../lib/api'
-import { formatValue } from '../lib/format'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { apiDelete, apiGet, ApiError } from '../lib/api'
+import { fieldLabel, recordLabel } from '../lib/format'
 import { FieldInput, shouldAutoCloseOnCommit } from './FieldInput'
+import { FieldValue } from './FieldValue'
 import { LinkRecordControl } from './LinkRecordControl'
-import type { EntitySchema, FieldKind, RecordRow, RelatedBlocks } from './types'
-
-/** Related records don't carry the target entity's schema, so this falls
- * back across the common label-ish fields rather than assuming `name`. */
-function relatedRecordLabel(record: Record<string, unknown> | undefined): string {
-  if (!record) return ''
-  const candidate = record.name ?? record.full_name ?? record.title ?? record.filename ?? record.id
-  return String(candidate ?? '')
-}
+import { useRecordLabels } from './useRecordLabels'
+import { useSaveField } from './useSaveField'
+import type { EntitySchema, RecordRow, RelatedBlocks } from './types'
 
 interface RecordDetailProps {
   entity: string
@@ -53,21 +48,14 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
     }
   }, [entity, recordId, loadRelated])
 
-  async function saveField(name: string, value: unknown, kind: FieldKind) {
-    if (!record) return
-    const isCustom = schema.fields[name] === undefined
-    const changes = isCustom ? { custom: { [name]: value } } : { [name]: value }
-    try {
-      const updated = await apiPatch<{ record: RecordRow }>(`/records/${entity}/${recordId}`, { changes })
-      setRecord(updated.record)
-    } catch (err) {
-      window.alert(err instanceof ApiError ? err.detail : 'Failed to save')
-    } finally {
-      if (shouldAutoCloseOnCommit(kind)) {
-        setEditingField(null)
-      }
-    }
-  }
+  const { saveField, saving: savingField } = useSaveField({
+    entity,
+    schema,
+    onSaved: (_, updated) => setRecord(updated),
+    onSettled: (_, __, kind) => {
+      if (shouldAutoCloseOnCommit(kind)) setEditingField(null)
+    },
+  })
 
   async function handleDelete() {
     if (!window.confirm(`Delete this ${schema.label.toLowerCase()} record? This cannot be undone.`)) return
@@ -78,6 +66,14 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
       window.alert(err instanceof ApiError ? err.detail : 'Failed to delete')
     }
   }
+
+  const referenceRefs = useMemo(() => {
+    if (!record) return []
+    return Object.entries(schema.fields).flatMap(([name, field]) =>
+      field.references ? [{ entity: field.references, id: record[name] as string | null }] : [],
+    )
+  }, [record, schema])
+  const { labelFor } = useRecordLabels(referenceRefs)
 
   if (error) return <div className="crm-table-status crm-table-status-error">{error}</div>
   if (!record) return <div className="crm-table-status">Loading…</div>
@@ -104,22 +100,33 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
             const value = record[name]
             return (
               <div className="crm-detail-field" key={name}>
-                <div className="crm-detail-field-label">{name.replace(/_/g, ' ')}</div>
+                <div className="crm-detail-field-label">{fieldLabel(field, name)}</div>
                 {isEditing ? (
                   <FieldInput
                     kind={field.kind}
                     value={value}
                     options={field.options}
+                    references={field.references}
                     autoFocus
-                    onChange={(v) => saveField(name, v, field.kind)}
+                    onChange={(v) => saveField(recordId, name, v, field.kind)}
                     onBlur={() => setEditingField(null)}
                   />
                 ) : (
                   <div
                     className={field.writable ? 'crm-detail-field-value crm-cell-editable' : 'crm-detail-field-value'}
-                    onClick={() => field.writable && setEditingField(name)}
+                    onClick={() => field.writable && !savingField && setEditingField(name)}
                   >
-                    {formatValue(field.kind, value) || <span className="crm-detail-empty">—</span>}
+                    {value === null || value === undefined || value === '' ? (
+                      <span className="crm-detail-empty">—</span>
+                    ) : (
+                      <FieldValue
+                        kind={field.kind}
+                        value={value}
+                        currency={record.currency as string | undefined}
+                        referenceEntity={field.references}
+                        referenceLabel={field.references ? labelFor(field.references, value as string | null) : null}
+                      />
+                    )}
                   </div>
                 )}
               </div>
@@ -139,15 +146,19 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
                       value={value}
                       options={cf.options}
                       autoFocus
-                      onChange={(v) => saveField(cf.key, v, cf.kind)}
+                      onChange={(v) => saveField(recordId, cf.key, v, cf.kind)}
                       onBlur={() => setEditingField(null)}
                     />
                   ) : (
                     <div
                       className={cf.writable ? 'crm-detail-field-value crm-cell-editable' : 'crm-detail-field-value'}
-                      onClick={() => cf.writable && setEditingField(cf.key)}
+                      onClick={() => cf.writable && !savingField && setEditingField(cf.key)}
                     >
-                      {formatValue(cf.kind, value) || <span className="crm-detail-empty">—</span>}
+                      {value === null || value === undefined || value === '' ? (
+                        <span className="crm-detail-empty">—</span>
+                      ) : (
+                        <FieldValue kind={cf.kind} value={value} />
+                      )}
                     </div>
                   )}
                 </div>
@@ -166,7 +177,7 @@ export function RecordDetail({ entity, recordId, schema, onDeleted, onClose }: R
               <div className="crm-related-block-label">{label}</div>
               {items.map((item) => (
                 <div className="crm-related-item" key={item.association_id}>
-                  {relatedRecordLabel(item.record)}
+                  {recordLabel(item.record)}
                 </div>
               ))}
             </div>

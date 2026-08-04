@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
-import { apiGet, apiPost, withQuery, ApiError } from '../lib/api'
-import type { EntitySchema, ListResult, RecordRow } from './types'
+import { apiGet, apiPost, ApiError } from '../lib/api'
+import { recordLabel } from '../lib/format'
+import { useEntitySchema } from './useEntitySchema'
+import { useRecordSearch } from './useRecordSearch'
+import type { ListResult, RecordRow } from './types'
 
 interface RoleOption {
   role: string
@@ -32,9 +35,8 @@ export function LinkRecordControl({ entity, recordId, onLinked }: LinkRecordCont
   const [roles, setRoles] = useState<RoleOption[]>([])
   const [selectedRole, setSelectedRole] = useState<RoleOption | null>(null)
   const [targetType, setTargetType] = useState<string>('')
-  const [targetSchema, setTargetSchema] = useState<EntitySchema | null>(null)
+  const { schema: targetSchema } = useEntitySchema(targetType || undefined)
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<RecordRow[]>([])
   const [error, setError] = useState<string | null>(null)
   const [gpRoles, setGpRoles] = useState<RecordRow[]>([])
   const [gpRoleKey, setGpRoleKey] = useState('')
@@ -68,29 +70,9 @@ export function LinkRecordControl({ entity, recordId, onLinked }: LinkRecordCont
       })
   }, [selectedRole])
 
-  useEffect(() => {
-    if (!targetType) {
-      setTargetSchema(null)
-      return
-    }
-    apiGet<EntitySchema>(`/records/${targetType}/schema`).then(setTargetSchema)
-  }, [targetType])
-
-  useEffect(() => {
-    if (!targetType || !targetSchema || !query.trim()) {
-      setResults([])
-      return
-    }
-    const searchable = targetSchema.searchable.length > 0 ? targetSchema.searchable : [targetSchema.label_field]
-    const path = withQuery(`/records/${targetType}`, {
-      filter: { or: searchable.map((f) => ({ field: f, op: 'contains', value: query.trim() })) },
-      limit: 10,
-    })
-    const handle = setTimeout(() => {
-      apiGet<ListResult>(path).then((r) => setResults(r.records))
-    }, 200)
-    return () => clearTimeout(handle)
-  }, [targetType, targetSchema, query])
+  const { results, loading: searching, error: searchError } = useRecordSearch(
+    targetType || null, targetSchema, query,
+  )
 
   async function link(target: RecordRow) {
     if (!selectedRole) return
@@ -106,7 +88,6 @@ export function LinkRecordControl({ entity, recordId, onLinked }: LinkRecordCont
       setSelectedRole(null)
       setTargetType('')
       setQuery('')
-      setResults([])
       setGpRoleKey('')
       onLinked()
     } catch (err) {
@@ -124,7 +105,7 @@ export function LinkRecordControl({ entity, recordId, onLinked }: LinkRecordCont
 
   return (
     <div className="crm-link-record-form">
-      {error && <div className="crm-auth-error">{error}</div>}
+      {(error || searchError) && <div className="crm-auth-error">{error || searchError}</div>}
       <select
         value={selectedRole?.role ?? ''}
         onChange={(e) => {
@@ -171,11 +152,18 @@ export function LinkRecordControl({ entity, recordId, onLinked }: LinkRecordCont
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
           />
-          {results.length > 0 && (
-            <div className="crm-link-record-results">
+          {query.trim() && (
+            <div className="crm-record-picker-results">
+              {searching && <div className="crm-record-picker-status">Searching…</div>}
+              {searchError && (
+                <div className="crm-record-picker-status crm-record-picker-error">{searchError}</div>
+              )}
+              {!searching && !searchError && results.length === 0 && (
+                <div className="crm-record-picker-status">No matches.</div>
+              )}
               {results.map((r) => (
-                <button key={String(r.id)} className="crm-link-record-result" onClick={() => link(r)}>
-                  {String(r[targetSchema?.label_field ?? 'id'] ?? r.id)}
+                <button key={String(r.id)} className="crm-record-picker-result" onClick={() => link(r)}>
+                  {recordLabel(r, targetSchema?.label_field)}
                 </button>
               ))}
             </div>

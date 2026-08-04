@@ -442,7 +442,7 @@ button:disabled {
 
 .crm-cell-editable {
   cursor: text;
-  display: inline-block;
+  display: block;
   min-width: 24px;
   min-height: 1em;
 }
@@ -582,22 +582,6 @@ button:disabled {
   position: relative;
 }
 
-.crm-link-record-results {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 4px;
-  max-height: 160px;
-  overflow-y: auto;
-}
-
-.crm-link-record-result {
-  text-align: left;
-  font-size: var(--fs-small);
-  padding: 4px 8px;
-  background: var(--surface-base);
-}
-
 .crm-link-record-cancel {
   align-self: flex-start;
   font-size: var(--fs-tiny);
@@ -605,6 +589,87 @@ button:disabled {
   border: none;
   color: var(--text-subtle);
   padding: 2px;
+}
+
+/* ── Field value rendering (references, url/email/phone anchors) ────────── */
+
+.crm-reference-link,
+.crm-value-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.crm-reference-link:hover,
+.crm-value-link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* ── Record picker (reference-field FieldInput) ──────────────────────── */
+
+.crm-record-picker {
+  position: relative;
+  width: 100%;
+}
+
+.crm-record-picker-input-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.crm-record-picker-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.crm-record-picker-clear {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-subtle);
+  padding: 0 4px;
+  font-size: var(--fs-small);
+}
+
+.crm-record-picker-results {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--surface-base);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+  padding: 4px;
+}
+
+.crm-record-picker-result {
+  text-align: left;
+  font-size: var(--fs-small);
+  padding: 4px 8px;
+  background: transparent;
+}
+
+.crm-record-picker-result:hover {
+  background: var(--surface-sunken);
+}
+
+.crm-record-picker-status {
+  font-size: var(--fs-tiny);
+  color: var(--text-subtle);
+  padding: 4px 8px;
+}
+
+.crm-record-picker-error {
+  color: var(--status-error);
 }
 
 /* ── Modal ────────────────────────────────────────────────────────────── */

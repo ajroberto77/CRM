@@ -17,6 +17,17 @@ export interface FieldSchema {
   writable: boolean
   required: boolean
   options: string[]
+  label: string
+  /** The registered entity a `uuid` field's value points at, when fixed --
+   * mirrors server/core/registry.py's `FieldSpec.references`. */
+  references: string | null
+  /** For a polymorphic reference, the name of the sibling field holding the
+   * target entity name for this row -- mirrors `FieldSpec.references_type_field`. */
+  references_type_field: string | null
+  /** This field's valid filter operators, straight from query.py's own
+   * `operators_for(kind)` -- empty for an unfilterable field (e.g. a
+   * `compute` field like `deal.rotting`). */
+  operators: string[]
 }
 
 export interface CustomFieldSchema {
@@ -36,6 +47,7 @@ export interface EntitySchema {
   searchable: string[]
   supports_custom_fields: boolean
   admin_only: boolean
+  list_columns: string[]
   fields: Record<string, FieldSchema>
   custom_fields: CustomFieldSchema[]
   can_create: boolean
@@ -50,6 +62,9 @@ export interface EntitySummary {
   label_field: string
   admin_only: boolean
   module: string
+  nav: 'primary' | 'settings' | 'none'
+  nav_group: string
+  nav_order: number
 }
 
 /** A record's shape is inherently dynamic -- see EntitySchema above. Custom

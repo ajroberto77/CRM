@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { FieldInput } from './FieldInput'
 import { createRecord } from './RecordTable'
 import { ApiError } from '../lib/api'
+import { fieldLabel } from '../lib/format'
 import type { EntitySchema, RecordRow } from './types'
 
 interface CreateRecordModalProps {
@@ -21,9 +22,24 @@ export function CreateRecordModal({ entity, schema, onCreated, onClose }: Create
     ([name, f]) => f.writable && !['owner_id'].includes(name),
   )
 
+  function missingRequiredFields(): string[] {
+    return writableFields
+      .filter(([name, field]) => {
+        if (!field.required) return false
+        const value = values[name]
+        return value === undefined || value === null || value === ''
+      })
+      .map(([name, field]) => fieldLabel(field, name))
+  }
+
   async function onSubmit() {
-    setBusy(true)
     setError(null)
+    const missing = missingRequiredFields()
+    if (missing.length > 0) {
+      setError(`Required: ${missing.join(', ')}`)
+      return
+    }
+    setBusy(true)
     try {
       const body: Record<string, unknown> = { ...values }
       if (Object.keys(custom).length > 0) body.custom = custom
@@ -44,12 +60,13 @@ export function CreateRecordModal({ entity, schema, onCreated, onClose }: Create
         <div className="crm-modal-fields">
           {writableFields.map(([name, field]) => (
             <label key={name} className="crm-modal-field">
-              {name.replace(/_/g, ' ')}
+              {fieldLabel(field, name)}
               {field.required && <span className="crm-required-mark"> *</span>}
               <FieldInput
                 kind={field.kind}
                 value={values[name]}
                 options={field.options}
+                references={field.references}
                 onChange={(v) => setValues((prev) => ({ ...prev, [name]: v }))}
               />
             </label>

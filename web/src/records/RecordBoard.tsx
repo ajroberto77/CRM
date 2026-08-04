@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { apiGet, apiPatch, ApiError } from '../lib/api'
+import { apiGet, ApiError } from '../lib/api'
 import { formatCurrency, formatValue } from '../lib/format'
 import { useRecordList } from './useRecordList'
+import { useSaveField } from './useSaveField'
 import type { EntitySchema, FilterNode, RecordRow, SortSpec } from './types'
 
 /**
@@ -122,29 +123,33 @@ export function RecordBoard({ entity, schema, filters, sort, groupBy, onOpenReco
   const [dragOverLane, setDragOverLane] = useState<string | null>(null)
   const [movingId, setMovingId] = useState<string | null>(null)
 
+  const { saveField } = useSaveField({
+    entity,
+    schema,
+    onSaved: (recordId, updated) =>
+      setResult((prev) =>
+        prev ? { ...prev, records: prev.records.map((r) => (r.id === recordId ? updated : r)) } : prev,
+      ),
+  })
+
   async function moveRecord(row: RecordRow, laneValue: string | null) {
     const currentValue = row[groupBy]
     const normalizedCurrent = currentValue === undefined || currentValue === '' ? null : (currentValue as string | null)
     if (normalizedCurrent === laneValue) return
     setMovingId(row.id)
+    // Optimistic: the lane change shows immediately, before the round trip
+    // -- board drag-and-drop is the one caller of useSaveField that needs
+    // this, so it stays local rather than folded into the shared hook.
     setResult((prev) =>
       prev
         ? { ...prev, records: prev.records.map((r) => (r.id === row.id ? { ...r, [groupBy]: laneValue } : r)) }
         : prev,
     )
-    try {
-      const updated = await apiPatch<{ record: RecordRow }>(`/records/${entity}/${row.id}`, {
-        changes: { [groupBy]: laneValue },
-      })
-      setResult((prev) =>
-        prev ? { ...prev, records: prev.records.map((r) => (r.id === row.id ? updated.record : r)) } : prev,
-      )
-    } catch (err) {
+    const ok = await saveField(String(row.id), groupBy, laneValue, groupFieldSchema?.kind ?? 'text')
+    if (!ok) {
       setResult((prev) => (prev ? { ...prev, records: prev.records.map((r) => (r.id === row.id ? row : r)) } : prev))
-      window.alert(err instanceof ApiError ? err.detail : 'Failed to move record')
-    } finally {
-      setMovingId(null)
     }
+    setMovingId(null)
   }
 
   if (pipelineError) return <div className="crm-table-status crm-table-status-error">{pipelineError}</div>
@@ -240,7 +245,9 @@ export function RecordBoard({ entity, schema, filters, sort, groupBy, onOpenReco
                         branching, but still a convention worth a future FieldSpec-level
                         "badge" flag if a second computed warning field ever needs this. */}
                     {hasAmount && (
-                      <div className="crm-record-board-card-meta">{formatCurrency(row.amount)}</div>
+                      <div className="crm-record-board-card-meta">
+                        {formatCurrency(row.amount, row.currency as string | undefined)}
+                      </div>
                     )}
                     {row.rotting === true && <span className="crm-record-board-card-rotting">Rotting</span>}
                   </div>

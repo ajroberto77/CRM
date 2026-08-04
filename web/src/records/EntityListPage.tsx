@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useEntitySchema } from './useEntitySchema'
 import { RecordTable } from './RecordTable'
 import { RecordBoard } from './RecordBoard'
 import { RecordDetail } from './RecordDetail'
 import { CreateRecordModal } from './CreateRecordModal'
+import { buildSearchFilter } from './searchFilter'
 import { ViewSwitcher } from '../views/ViewSwitcher'
 import { useSavedViews } from '../views/useSavedViews'
 import type { FilterNode, SavedView } from './types'
@@ -23,19 +24,27 @@ function EntityListPageForEntity() {
 
   const [activeView, setActiveView] = useState<SavedView | null>(null)
   const [search, setSearch] = useState('')
+  // Debounced separately from `search` itself -- the input stays instantly
+  // responsive to typing, but the filter (and therefore the list fetch it
+  // drives) only updates 250ms after the user stops, not once per keystroke.
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [creating, setCreating] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
+
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedSearch(search), 250)
+    return () => clearTimeout(handle)
+  }, [search])
 
   const filters = useMemo<FilterNode | null>(() => {
     const clauses: FilterNode[] = []
     if (activeView?.filters) clauses.push(activeView.filters)
-    if (search.trim() && schema) {
-      const searchable = schema.searchable.length > 0 ? schema.searchable : [schema.label_field]
-      clauses.push({ or: searchable.map((field) => ({ field, op: 'contains', value: search.trim() })) })
+    if (debouncedSearch.trim() && schema) {
+      clauses.push(buildSearchFilter(schema, debouncedSearch.trim()))
     }
     if (clauses.length === 0) return null
     return clauses.length === 1 ? clauses[0] : { and: clauses }
-  }, [activeView, search, schema])
+  }, [activeView, debouncedSearch, schema])
 
   if (loading) return <div className="crm-table-status">Loading…</div>
   if (error || !schema) return <div className="crm-table-status crm-table-status-error">{error ?? 'Unknown entity'}</div>
@@ -92,7 +101,6 @@ function EntityListPageForEntity() {
               filters={filters}
               sort={activeView?.sort ?? null}
               columns={activeView?.columns ?? null}
-              onOpenRecord={(id) => navigate(`/e/${entity}/${id}`)}
               refreshToken={refreshToken}
             />
           )}

@@ -285,7 +285,12 @@ def install() -> None:
         # registry.verify()'s pairing rule for a computed label_field.
         searchable=("currency",),
         nav_group="Investing", nav_order=30,
-        list_columns=("display_label", "fund_id", "status", "committed_at"),
+        # Fund leads the row -- what the commitment is TO is the identifying
+        # fact ("Northgate Fund II"), not the amount, which is why fund_id
+        # is first even though display_label (the amount+currency) is what
+        # the row actually opens on (RecordTable links whichever column is
+        # label_field, not whichever is listed first).
+        list_columns=("fund_id", "display_label", "status", "committed_at"),
         fields=spine({
             "fund_id": FieldSpec("fund_id", "uuid", column="fund_id", required=True,
                                  label="Fund", references="fund"),

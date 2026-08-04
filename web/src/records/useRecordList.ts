@@ -29,6 +29,7 @@ export function useRecordList(
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    let cancelled = false
     setLoading(true)
     setError(null)
     const path = withQuery(`/records/${entity}`, {
@@ -37,9 +38,18 @@ export function useRecordList(
       limit,
     })
     apiGet<ListResult>(path)
-      .then((r) => setResultState(r))
-      .catch((err) => setError(err instanceof ApiError ? err.detail : String(err)))
-      .finally(() => setLoading(false))
+      .then((r) => {
+        if (!cancelled) setResultState(r)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof ApiError ? err.detail : String(err))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [entity, filters, sort, refreshToken, limit])
 
   function setResult(updater: (prev: ListResult | null) => ListResult | null) {

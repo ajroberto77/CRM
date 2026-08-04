@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FocusEvent, KeyboardEvent } from 'react'
+import { RecordPicker } from './RecordPicker'
 import type { FieldKind } from './types'
 
 interface FieldInputProps {
@@ -10,6 +11,12 @@ interface FieldInputProps {
   autoFocus?: boolean
   onBlur?: () => void
   onKeyDown?: (e: React.KeyboardEvent) => void
+  /** For `kind === 'uuid'` with a fixed target (`FieldSpec.references`) --
+   * renders a `RecordPicker` instead of a raw text box. A polymorphic
+   * reference (`references_type_field`) still falls through to the plain
+   * uuid text input below; picking both a type and a target is Phase 5's
+   * concern (the record page's own subject editor), not this generic form. */
+  references?: string | null
 }
 
 /** Whether an inline editor (RecordTable.saveCell, RecordDetail.saveField)
@@ -27,7 +34,22 @@ export function shouldAutoCloseOnCommit(kind: FieldKind): boolean {
 /** The one control per field kind (R1/R5) -- used for inline table-cell
  * editing, the detail-view form, and the create form alike, so a field never
  * renders differently depending on which screen it happens to be on. */
-export function FieldInput({ kind, value, options, onChange, autoFocus, onBlur, onKeyDown }: FieldInputProps) {
+export function FieldInput({
+  kind, value, options, onChange, autoFocus, onBlur, onKeyDown, references,
+}: FieldInputProps) {
+  if (kind === 'uuid' && references) {
+    return (
+      <RecordPicker
+        entity={references}
+        value={typeof value === 'string' ? value : null}
+        onChange={onChange}
+        autoFocus={autoFocus}
+        onBlur={onBlur}
+        onKeyDown={onKeyDown}
+      />
+    )
+  }
+
   if (kind === 'boolean') {
     return (
       <input
@@ -86,6 +108,35 @@ export function FieldInput({ kind, value, options, onChange, autoFocus, onBlur, 
     )
   }
 
+  return (
+    <TextLikeInput
+      kind={kind}
+      value={value}
+      onChange={onChange}
+      autoFocus={autoFocus}
+      onBlur={onBlur}
+      onKeyDown={onKeyDown}
+    />
+  )
+}
+
+interface TextLikeInputProps {
+  kind: FieldKind
+  value: unknown
+  onChange: (value: unknown) => void
+  autoFocus?: boolean
+  onBlur?: () => void
+  onKeyDown?: (e: React.KeyboardEvent) => void
+}
+
+/** Every non-discrete-choice kind (text/number/date/datetime/email/url/
+ * phone) -- a single native `<input>`, but committing (calling `onChange`,
+ * which is what triggers the PATCH at every call site) only on blur or
+ * Enter, not on every keystroke. Holds its own draft state so typing stays
+ * purely local until then; without this, a five-character edit was five
+ * separate PATCH requests, the last one to land winning regardless of which
+ * keystroke it corresponded to. */
+function TextLikeInput({ kind, value, onChange, autoFocus, onBlur, onKeyDown }: TextLikeInputProps) {
   const inputType =
     kind === 'number' || kind === 'currency'
       ? 'number'
@@ -101,21 +152,40 @@ export function FieldInput({ kind, value, options, onChange, autoFocus, onBlur, 
                 ? 'tel'
                 : 'text'
 
+  const [draft, setDraft] = useState(value === null || value === undefined ? '' : String(value))
+
+  // The committed value can change out from under this control (a parent
+  // re-fetch after another edit, e.g. RecordTable's optimistic row swap) --
+  // resync the draft when that happens rather than showing a stale edit.
+  useEffect(() => {
+    setDraft(value === null || value === undefined ? '' : String(value))
+  }, [value])
+
+  function commit() {
+    if (inputType === 'number') {
+      onChange(draft === '' ? null : Number(draft))
+    } else {
+      onChange(draft === '' ? null : draft)
+    }
+  }
+
   return (
     <input
       type={inputType}
-      value={value === null || value === undefined ? '' : String(value)}
-      onChange={(e) => {
-        const raw = e.target.value
-        if (inputType === 'number') {
-          onChange(raw === '' ? null : Number(raw))
-        } else {
-          onChange(raw === '' ? null : raw)
-        }
-      }}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
       autoFocus={autoFocus}
-      onBlur={onBlur}
-      onKeyDown={onKeyDown}
+      onBlur={() => {
+        commit()
+        onBlur?.()
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          commit()
+        }
+        onKeyDown?.(e)
+      }}
     />
   )
 }

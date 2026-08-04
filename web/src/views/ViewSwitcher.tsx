@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { fieldLabel } from '../lib/format'
 import type { EntitySchema, SavedView } from '../records/types'
 
 interface ViewSwitcherProps {
@@ -76,7 +77,7 @@ export function ViewSwitcher({ views, activeViewId, schema, onSelect, onSaveCurr
               </option>
               {candidates.map((f) => (
                 <option key={f} value={f}>
-                  {f.replace(/_/g, ' ')}
+                  {fieldLabel(schema.fields[f], f)}
                 </option>
               ))}
             </select>
