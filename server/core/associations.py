@@ -399,3 +399,60 @@ def roles_of(
     """
     edges = edges_for(principal, subject_type, subject_id, as_of=as_of)
     return sorted({e["role"] for e in edges})
+
+
+def role_summary_for(
+    principal: Principal,
+    subject_type: str,
+    subject_ids: Iterable[str],
+    *,
+    as_of: Any = None,
+) -> dict[str, list[dict[str, Any]]]:
+    """`roles_of()`, batched for every id in `subject_ids` in ONE query --
+    the `role_summary` computed field's `context_builder_ids` source (see
+    `registry.py`'s `organization`/`person` registration). This is what lets a
+    record's emergent "type" (LP, portfolio company, GP team member, all of the
+    above at once...) render on a list page without a per-row lookup.
+
+    Same presentation `related_blocks()` derives per edge (`registry.
+    role_presentation()`), so a record's role pills can never drift from its
+    own related-records panel labels. Deliberately collapses multiple edges of
+    the same (role, direction) into one entry -- an LP in three funds is one
+    "LP in" pill, not three -- since this is a type summary, not the detailed
+    edge list `related_blocks()`/`edges_for()` already give.
+    """
+    ids = sorted({str(i) for i in subject_ids if i})
+    if not ids:
+        return {}
+    principal.require("read", subject_type)
+    when, when_params = _as_of_clause(_parse_date(as_of, "as_of"), include_history=False)
+
+    with pool.transaction(
+        org_id=principal.org_id, user_id=principal.user_id, readonly=True
+    ) as cur:
+        cur.execute(
+            "SELECT self_id, role, direction FROM core.association_edges "
+            " WHERE self_type = %s AND self_id = ANY(%s::uuid[]) AND (" + when + ")",
+            [subject_type, ids] + when_params,
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+
+    summary: dict[str, list[dict[str, Any]]] = {i: [] for i in ids}
+    seen: dict[str, set[tuple[str, str]]] = {i: set() for i in ids}
+    for row in rows:
+        subject_id = str(row["self_id"])
+        key = (row["role"], row["direction"])
+        if key in seen[subject_id]:
+            continue
+        seen[subject_id].add(key)
+        presentation = registry.role_presentation(registry.role(row["role"]), row["direction"])
+        summary[subject_id].append({
+            "role": row["role"],
+            "direction": row["direction"],
+            "label": presentation["label"],
+            "group": presentation["group"],
+            "group_order": presentation["group_order"],
+        })
+    for values in summary.values():
+        values.sort(key=lambda v: (v["group_order"], v["label"]))
+    return summary

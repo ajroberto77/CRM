@@ -94,11 +94,16 @@ def _finalize_read(
     return record
 
 
-def _context_for(principal: Principal, entity: str) -> dict[str, Any]:
+def _context_for(
+    principal: Principal, entity: str, record_ids: Iterable[str] = (),
+) -> dict[str, Any]:
     spec = registry.entity(entity)
-    if spec.context_builder is None:
-        return {}
-    return spec.context_builder(principal)
+    context: dict[str, Any] = {}
+    if spec.context_builder is not None:
+        context.update(spec.context_builder(principal))
+    if spec.context_builder_ids is not None:
+        context.update(spec.context_builder_ids(principal, [str(i) for i in record_ids]))
+    return context
 
 
 # ── Custom-field context ─────────────────────────────────────────────────────
@@ -337,10 +342,9 @@ def list_records(
             f"WHERE {where} {order.sql} LIMIT %s OFFSET %s",
             params + order.params + [limit, max(0, int(offset))],
         )
-        context = _context_for(principal, entity)
-        rows = [
-            _finalize_read(principal, entity, dict(r), context=context) for r in cur.fetchall()
-        ]
+        raw_rows = [dict(r) for r in cur.fetchall()]
+        context = _context_for(principal, entity, (r["id"] for r in raw_rows if "id" in r))
+        rows = [_finalize_read(principal, entity, r, context=context) for r in raw_rows]
 
         # Counted under the same predicate. A count that ignores visibility
         # leaks how many rows the principal cannot see.
@@ -477,7 +481,10 @@ def get_record(principal: Principal, entity: str, record_id: str) -> dict[str, A
         row = cur.fetchone()
     if row is None:
         raise NotFound(f"no {entity} {record_id}")
-    return _finalize_read(principal, entity, dict(row), context=_context_for(principal, entity))
+    row = dict(row)
+    return _finalize_read(
+        principal, entity, row, context=_context_for(principal, entity, [row["id"]])
+    )
 
 
 CHILDREN_BLOCK_LIMIT = 50
@@ -559,10 +566,9 @@ def fetch_many(
             f"WHERE t.id = ANY(%s::uuid[]) AND ({visible_sql})",
             [ids] + list(visible_params),
         )
-        context = _context_for(principal, entity)
-        rows = [
-            _finalize_read(principal, entity, dict(r), context=context) for r in cur.fetchall()
-        ]
+        raw_rows = [dict(r) for r in cur.fetchall()]
+        context = _context_for(principal, entity, (r["id"] for r in raw_rows))
+        rows = [_finalize_read(principal, entity, r, context=context) for r in raw_rows]
     return {str(r["id"]): r for r in rows}
 
 
@@ -658,7 +664,9 @@ def create(
         event_id = events.record_event(cur, event)
 
     _publish(event, event_id)
-    return _finalize_read(principal, entity, row, context=_context_for(principal, entity))
+    return _finalize_read(
+        principal, entity, row, context=_context_for(principal, entity, [row["id"]])
+    )
 
 
 def update(
@@ -740,7 +748,9 @@ def update(
         event_id = events.record_event(cur, event)
 
     _publish(event, event_id)
-    return _finalize_read(principal, entity, after, context=_context_for(principal, entity))
+    return _finalize_read(
+        principal, entity, after, context=_context_for(principal, entity, [after["id"]])
+    )
 
 
 def delete(principal: Principal, entity: str, record_id: str) -> bool:

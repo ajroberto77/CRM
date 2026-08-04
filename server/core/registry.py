@@ -154,6 +154,18 @@ class EntitySpec:
     # per returned record. None for every entity with no computed
     # fields, which is most of them.
     context_builder: Optional[Callable[["Principal"], dict[str, Any]]] = None
+    # Like `context_builder`, but also handed the ids of the rows just
+    # fetched -- for a computed field that needs a batched per-row lookup
+    # (e.g. `role_summary`'s association-edge lookup) rather than a per-org
+    # one. Built once per list()/get() call with EVERY fetched row's id, not
+    # once per row -- a record page's single `get()` still gets a one-row
+    # batch, never a per-row query. Merged into the same context dict
+    # `context_builder` populates, so a field's `compute()` never needs to
+    # know which of the two produced a given key. None for every entity
+    # with no such field, which is most of them.
+    context_builder_ids: Optional[
+        Callable[["Principal", list[str]], dict[str, Any]]
+    ] = None
     # Where this entity appears in the sidebar. "" derives a default at
     # registration-adjacent read time (verify() enforces the closed
     # vocabulary; Shell.tsx/the /records endpoint derive "" -> "settings" for
@@ -677,6 +689,32 @@ def _deal_rotting(record: dict[str, Any], context: dict[str, Any]) -> bool:
     return datetime.now(timezone.utc) - last_activity > timedelta(days=threshold_days)
 
 
+# `role_summary` -- an organization's or person's emergent "type," computed
+# from its live association-role graph rather than stored anywhere (R6: "a
+# role is not an entity type"). One organization can be an LP in one fund, a
+# co-investor on a deal, and a portfolio company of another, all at once --
+# `roles_of()` already answers this for one record; `role_summary_for()`
+# answers it for a whole page of rows in one query, which is exactly what
+# `context_builder_ids` (as opposed to `context_builder`) exists for.
+def _make_role_summary_context(
+    subject_type: str,
+) -> Callable[["Principal", list[str]], dict[str, Any]]:
+    def _context(principal: "Principal", ids: list[str]) -> dict[str, Any]:
+        # Local import: registry.py stays a foundational module with no
+        # runtime dependency on peer core modules (see the module docstring).
+        from server.core import associations
+
+        return {
+            "role_summary_by_id": associations.role_summary_for(principal, subject_type, ids)
+        }
+
+    return _context
+
+
+def _role_summary(record: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
+    return context.get("role_summary_by_id", {}).get(str(record.get("id")), [])
+
+
 # `interaction.display_label` -- a computed title, replacing the raw
 # `subject_hash` a design audit found rendering literally as a hash in every
 # table/detail title. No context_builder needed (nothing per-org to look up).
@@ -705,6 +743,7 @@ def register_core_entities() -> None:
         label_field="name", searchable=("name", "domain"),
         nav_group="Overview", nav_order=10,
         list_columns=("name", "domain", "domicile_country", "is_internal"),
+        context_builder_ids=_make_role_summary_context("organization"),
         fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
             "domain": FieldSpec("domain", "text", column="domain"),
@@ -717,6 +756,9 @@ def register_core_entities() -> None:
             "domicile_country": FieldSpec("domicile_country", "text",
                                           column="domicile_country",
                                           normalize=identity.normalize_country),
+            "role_summary": FieldSpec("role_summary", "jsonb", filterable=False,
+                                      sortable=False, writable=False,
+                                      compute=_role_summary),
         }),
     ))
 
@@ -725,6 +767,7 @@ def register_core_entities() -> None:
         label_field="full_name", searchable=("full_name", "primary_email"),
         nav_group="Overview", nav_order=20,
         list_columns=("full_name", "title", "primary_email", "tax_residence_country"),
+        context_builder_ids=_make_role_summary_context("person"),
         fields=spine({
             "full_name": FieldSpec("full_name", "text", column="full_name", required=True),
             "title": FieldSpec("title", "text", column="title"),
@@ -742,6 +785,9 @@ def register_core_entities() -> None:
             "citizenship_country": FieldSpec("citizenship_country", "text",
                                              normalize=identity.normalize_country,
                                              column="citizenship_country"),
+            "role_summary": FieldSpec("role_summary", "jsonb", filterable=False,
+                                      sortable=False, writable=False,
+                                      compute=_role_summary),
         }),
     ))
 
