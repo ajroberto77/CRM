@@ -258,6 +258,46 @@ button:disabled {
   font-weight: 600;
 }
 
+.crm-sidebar-entity-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.crm-sidebar-views {
+  display: flex;
+  flex-direction: column;
+  /* Nested under the entity link (DESIGN.md's "saved views nested under
+     each object") -- indented rather than sectioned, so the hierarchy reads
+     at a glance without a second .crm-sidebar-section-weight label. */
+  padding-left: 14px;
+}
+
+.crm-sidebar-view-link {
+  display: block;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: var(--fs-small);
+  /* A saved view's name is user-supplied free text with no guaranteed
+     spaces, same failure mode already guarded against on
+     .crm-related-item/.crm-timeline-body's .crm-reference-link,
+     .crm-settings-provider-card and .crm-record-board-card-title -- this
+     column is a fixed --sidebar-w (190px) with no overflow-x escape hatch. */
+  overflow-wrap: anywhere;
+}
+
+.crm-sidebar-view-link:hover {
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+}
+
+.crm-sidebar-view-link-active {
+  background: var(--tint-accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .crm-sidebar-divider {
   height: 1px;
   background: var(--border-default);

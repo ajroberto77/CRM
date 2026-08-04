@@ -121,3 +121,16 @@ class TestCountry:
         """Alpha-3 codes and full names are deliberately not accepted -- one
         canonical form, not a second one that has to be kept in sync."""
         assert identity.normalize_country(raw) is None
+
+
+class TestTicker:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [(" brk.a ", "BRK.A"), ("aapl", "AAPL"), ("brk-b", "BRK-B"), ("MSFT", "MSFT")],
+    )
+    def test_normalizes(self, raw, expected):
+        assert identity.normalize_ticker(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["", None, "not a ticker!", "way.too.many.dots"])
+    def test_rejects(self, raw):
+        assert identity.normalize_ticker(raw) is None

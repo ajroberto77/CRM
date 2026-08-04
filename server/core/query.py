@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Iterable, Optional
 
-from server.core import permissions, registry
+from server.core import dates, permissions, registry
 from server.core.permissions import Principal
 from server.core.registry import FieldSpec, UnknownField
 
@@ -270,6 +270,104 @@ def _coerce(spec: FieldSpec, op: str, value: Any, arity: int) -> list[Any]:
 
 # ── Filters ──────────────────────────────────────────────────────────────────
 
+def _compile_role_clause(
+    entity: str, node: dict[str, Any], *, principal: Principal, alias: str,
+) -> Compiled:
+    """`{"role": "portfolio_of", "direction": "from"|"to", "as_of": "...",
+    "include_history": false}` -- a clause with no `field`, compiled to an
+    `EXISTS` against `core.associations` instead of a comparison on
+    `entity`'s own row. This is what lets a saved view select "organizations
+    that are portfolio companies" the same way it selects "organizations
+    named Acme": generic across every registered role (R6 -- no per-vertical
+    code here), the same reason `and`/`or`/`not` are branches in
+    `compile_filter()` rather than a second parser.
+
+    An association is readable only when BOTH endpoints are
+    (`associations.py`'s module docstring), but this EXISTS never joins in
+    the other side's row -- it only tests whether a matching edge exists, so
+    it must check read access on the other side's entity TYPE itself, the
+    same way an ordinary field clause calls `permissions.
+    require_field_readable()` a few lines below in `compile_filter()`.
+    Skipping this would make `{"role": "portfolio_of", "direction": "from"}`
+    a disclosure oracle: a principal with no grant on `fund` at all could
+    still learn which organizations have SOME fund relationship purely from
+    which rows come back, via a `filters` value they can supply directly on
+    any list/aggregate call or a saved view's stored `filters` (`core.
+    saved_views.filters` is re-permission-checked on every execution, a
+    promise this clause must keep).
+
+    Defaults to "as of today" when `as_of` is omitted, and `include_history`
+    must be set explicitly to see an ended association -- the same default
+    `associations.edges_for()`/`roles_of()` already use. Getting this wrong
+    silently would be a real bug for exactly the saved views this exists for:
+    "Portfolio companies" divested five years ago must not still match.
+
+    Queries the base table directly rather than `core.association_edges`:
+    the caller already names which side `entity` sits on via `direction`, so
+    there is no need for the view's self/other union.
+    """
+    role_name = node.get("role")
+    direction = node.get("direction", "from")
+    if not isinstance(role_name, str):
+        raise FilterError("'role' filter needs a string role name")
+    if direction not in ("from", "to"):
+        raise FilterError(f"direction must be 'from' or 'to', got {direction!r}")
+
+    role_spec = registry.role(role_name)  # raises UnknownField for a typo'd role
+    if node.get("include_history"):
+        when_sql, when_params = "TRUE", []
+    else:
+        try:
+            as_of = dates.parse_date(node.get("as_of"), "as_of") or date.today()
+        except dates.DateParseError as exc:
+            raise FilterError(str(exc)) from exc
+        when_sql, when_params = dates.overlap_clause(
+            include_history=False, as_of=as_of, alias="a"
+        )
+
+    if role_spec.symmetric:
+        # Canonicalized on write (endpoints sorted alphabetically), so
+        # `entity`'s matching row can land on either side regardless of the
+        # direction the caller asked for -- `direction` is meaningless for a
+        # symmetric role, unlike an asymmetric one where it picks which
+        # endpoint type to match. Every symmetric role connects same-typed
+        # endpoints (from_types == to_types by construction), so `entity`
+        # still names the type filter on both sides of the OR.
+        if entity not in role_spec.from_types:
+            raise FilterError(
+                f"{role_name!r} does not connect to {entity!r} "
+                f"(valid: {', '.join(role_spec.from_types)})"
+            )
+        for other in role_spec.from_types:
+            principal.require("read", other)
+        sql = (
+            f"EXISTS (SELECT 1 FROM core.associations a "
+            f"WHERE a.role = %s "
+            f"AND ((a.from_type = %s AND a.from_id = {alias}.id) "
+            f"OR (a.to_type = %s AND a.to_id = {alias}.id)) "
+            f"AND ({when_sql}))"
+        )
+        return Compiled(sql, [role_name, entity, entity] + when_params)
+
+    valid_types = role_spec.from_types if direction == "from" else role_spec.to_types
+    if entity not in valid_types:
+        raise FilterError(
+            f"{role_name!r} does not connect as {direction!r} to {entity!r} "
+            f"(valid: {', '.join(valid_types)})"
+        )
+    other_types = role_spec.to_types if direction == "from" else role_spec.from_types
+    for other in other_types:
+        principal.require("read", other)
+
+    id_col, type_col = ("from_id", "from_type") if direction == "from" else ("to_id", "to_type")
+    sql = (
+        f"EXISTS (SELECT 1 FROM core.associations a "
+        f"WHERE a.{type_col} = %s AND a.{id_col} = {alias}.id "
+        f"AND a.role = %s AND ({when_sql}))"
+    )
+    return Compiled(sql, [entity, role_name] + when_params)
+
+
 def compile_filter(
     entity: str,
     node: Optional[dict[str, Any]],
@@ -314,6 +412,12 @@ def compile_filter(
             alias=alias, _depth=_depth + 1, _budget=budget,
         )
         return Compiled(f"(NOT {inner.sql})", inner.params)
+
+    if "role" in node:
+        budget[0] -= 1
+        if budget[0] < 0:
+            raise FilterError(f"a filter may contain at most {MAX_CLAUSES} clauses")
+        return _compile_role_clause(entity, node, principal=principal, alias=alias)
 
     budget[0] -= 1
     if budget[0] < 0:

@@ -95,6 +95,13 @@ export type FilterNode =
   | { field: string; op: string; value?: unknown }
   | { and: FilterNode[] }
   | { or: FilterNode[] }
+  | { not: FilterNode }
+  /** No `field` -- an EXISTS against `core.associations` instead of a
+   * comparison on the entity's own row (server/core/query.py's
+   * `_compile_role_clause`). A seeded saved view (e.g. "Portfolio companies")
+   * is the first real producer of this shape; the UI only ever passes it
+   * through opaquely (FilterBuilder never constructs one by hand). */
+  | { role: string; direction: 'from' | 'to'; as_of?: string; include_history?: boolean }
 
 export interface RelatedItem {
   association_id: string

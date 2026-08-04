@@ -47,6 +47,12 @@ ACCOUNT_TYPES = (
 )
 ACCOUNT_STATUSES = ("prospect", "onboarding", "active", "restricted", "closed")
 
+# core.securities.security_type/status -- same closed-vocabulary discipline,
+# kept in sync by hand with the CHECK constraint in TABLES below (the same
+# convention ACCOUNT_TYPES/ACCOUNT_STATUSES already follow).
+SECURITY_TYPES = ("common_stock", "preferred_stock", "adr", "other")
+SECURITY_STATUSES = ("active", "delisted")
+
 # core.gp_roles, seeded per-org at creation (see _seed_gp_roles below) --
 # describes what someone actually does at a GP firm (Managing Partner, CFO,
 # ...). Deliberately a plain admin-configurable reference list, the same
@@ -188,6 +194,34 @@ TABLES: dict[str, dict[str, str]] = {
         "created_at": "timestamptz NOT NULL DEFAULT now()",
         "updated_at": "timestamptz NOT NULL DEFAULT now()",
     },
+    # Ticker/exchange for a public target/portfolio company. Kept off
+    # `core.organizations` (which only carries the domain-neutral
+    # `is_public` flag) because this is lifecycle-shaped -- a company lists,
+    # delists, changes ticker -- the same reasoning that already gave
+    # metric_facts/documents their own tables instead of columns, applied
+    # here so core stays fund-vocabulary-free (R6).
+    "core.securities": {
+        "id": "uuid PRIMARY KEY DEFAULT gen_random_uuid()",
+        "org_id": "uuid NOT NULL REFERENCES core.orgs(id) ON DELETE CASCADE",
+        "owner_id": "uuid REFERENCES core.users(id) ON DELETE SET NULL",
+        "organization_id": "uuid NOT NULL REFERENCES core.organizations(id) ON DELETE CASCADE",
+        "ticker": "text NOT NULL DEFAULT ''",
+        "exchange": "text NOT NULL DEFAULT ''",
+        "security_type": (
+            "text NOT NULL DEFAULT 'common_stock' CHECK (security_type IN ("
+            "'common_stock','preferred_stock','adr','other'))"
+        ),
+        "currency": "text NOT NULL DEFAULT 'USD'",
+        "listed_from": "date",
+        "listed_until": "date",
+        "status": (
+            "text NOT NULL DEFAULT 'active' CHECK (status IN ("
+            "'active','delisted'))"
+        ),
+        "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
+        "created_at": "timestamptz NOT NULL DEFAULT now()",
+        "updated_at": "timestamptz NOT NULL DEFAULT now()",
+    },
 }
 
 INDEXES: tuple[str, ...] = (
@@ -223,6 +257,12 @@ INDEXES: tuple[str, ...] = (
     "ON core.investment_accounts USING gin (custom jsonb_path_ops)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_gp_roles_org_key "
     "ON core.gp_roles (org_id, key)",
+    "CREATE INDEX IF NOT EXISTS ix_securities_org_updated "
+    "ON core.securities (org_id, updated_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS ix_securities_org_organization "
+    "ON core.securities (org_id, organization_id)",
+    "CREATE INDEX IF NOT EXISTS ix_securities_custom_gin "
+    "ON core.securities USING gin (custom jsonb_path_ops)",
 )
 
 
@@ -239,6 +279,71 @@ def _commitment_display_label(record: dict, context: dict) -> str:
     except (TypeError, ValueError):
         formatted = str(amount)
     return f"{formatted} {currency}".strip()
+
+
+def _seed_default_saved_views(org_id: str) -> None:
+    """Default per-entity saved views, seeded once at org creation -- ordinary,
+    user-editable/deletable `saved_view` rows the moment they exist (nothing
+    hardcoded in the frontend). Each filter is generic `{"role": ..., "direction":
+    ...}` shape (query.py's `_compile_role_clause`), so this is the funds
+    module's own vocabulary living entirely in its own seed, not a new core
+    concept.
+
+    Owned by nobody (`system_principal` writes leave `owner_id` NULL, same as
+    every other org seed) -- visible today to an admin (who bypasses ownership
+    scoping) and to any member whose role is granted `all`-level read on
+    `saved_view`. An unowned row is invisible under `own`/`team`-level read
+    (repository.py's visibility predicate matches `owner_id = principal.
+    user_id`, which a NULL never satisfies) -- the same pre-existing platform
+    characteristic every system-seeded, non-admin_only row has, not something
+    new here. `saved_view.is_shared` is stored but not yet wired into
+    visibility_predicate() anywhere in the codebase; making these visible to
+    every member regardless of role grants is a permissions-model change, out
+    of scope for this seed.
+    """
+    principal = permissions.system_principal(org_id, "seed default saved views")
+    company_roles = [
+        {"role": "lp_in", "direction": "from"},
+        {"role": "portfolio_of", "direction": "from"},
+        {"role": "evaluating", "direction": "to"},
+        {"role": "gp_of", "direction": "from"},
+    ]
+    views = [
+        {"entity": "organization", "name": "Portfolio companies",
+         "filters": {"role": "portfolio_of", "direction": "from"}},
+        {"entity": "organization", "name": "Prospects we're evaluating",
+         "filters": {"role": "evaluating", "direction": "to"}},
+        {"entity": "organization", "name": "Public markets we track",
+         "filters": {"and": [
+             {"field": "is_public", "op": "eq", "value": True},
+             {"or": [
+                 {"role": "portfolio_of", "direction": "from"},
+                 {"role": "evaluating", "direction": "to"},
+             ]},
+         ]}},
+        {"entity": "organization", "name": "LP organizations",
+         "filters": {"role": "lp_in", "direction": "from"}},
+        {"entity": "organization", "name": "Counterparties & vendors",
+         "filters": {"not": {"or": company_roles}}},
+        {"entity": "person", "name": "GP team",
+         "filters": {"role": "gp_of", "direction": "from"}},
+        {"entity": "person", "name": "LP individuals",
+         "filters": {"role": "lp_in", "direction": "from"}},
+        {"entity": "person", "name": "Board members & advisors",
+         "filters": {"or": [
+             {"role": "board_member_of", "direction": "from"},
+             {"role": "advisor_to", "direction": "from"},
+         ]}},
+        {"entity": "person", "name": "Ordinary contacts",
+         "filters": {"not": {"or": [
+             {"role": "board_member_of", "direction": "from"},
+             {"role": "advisor_to", "direction": "from"},
+             {"role": "gp_of", "direction": "from"},
+             {"role": "lp_in", "direction": "from"},
+         ]}}},
+    ]
+    for view in views:
+        repository.create(principal, "saved_view", dict(view))
 
 
 def _seed_gp_roles(org_id: str) -> None:
@@ -352,6 +457,32 @@ def install() -> None:
         }),
     ))
 
+    # A public target/portfolio company's ticker/exchange history -- reached
+    # only from its organization's own record (nav="none"), the same "pure
+    # join/child row" treatment `contact_channel` gets, via `organization_id`'s
+    # `references="organization"` (repository.children_of() walks this, R4).
+    register(EntitySpec(
+        name="security", table="core.securities", label="Securities",
+        module=MODULE, label_field="ticker", searchable=("ticker", "exchange"),
+        nav="none",
+        fields=spine({
+            "organization_id": FieldSpec("organization_id", "uuid",
+                                        column="organization_id", required=True,
+                                        label="Company", references="organization"),
+            "ticker": FieldSpec("ticker", "text", column="ticker", required=True,
+                                normalize=identity.normalize_ticker),
+            "exchange": FieldSpec("exchange", "text", column="exchange"),
+            "security_type": FieldSpec("security_type", "select",
+                                       column="security_type",
+                                       options=SECURITY_TYPES),
+            "currency": FieldSpec("currency", "text", column="currency"),
+            "listed_from": FieldSpec("listed_from", "date", column="listed_from"),
+            "listed_until": FieldSpec("listed_until", "date", column="listed_until"),
+            "status": FieldSpec("status", "select", column="status",
+                                options=SECURITY_STATUSES),
+        }),
+    ))
+
     # The vertical's relationship vocabulary. Core knows none of these words.
     # Phase E: `investment_account` added to `from_types` alongside
     # organization/person -- a commitment is properly made BY an account,
@@ -371,6 +502,17 @@ def install() -> None:
         "portfolio_of", ("organization",), ("fund",),
         inverse_label="portfolio", module=MODULE,
         label="Portfolio of", group="Investing", group_order=50))
+    # A prospective target, not yet invested -- a separate role rather than a
+    # `status` attribute on `portfolio_of`, matching the existing precedent
+    # that `lp_in`/`gp_of`/`portfolio_of` are three roles, not one role with a
+    # `kind` discriminator. The transition from evaluating to invested is two
+    # manual calls (end_association() then associate()), the same two-
+    # independent-writes shape a commitment and its `lp_in` association
+    # already have today.
+    register_role(AssociationRole(
+        "evaluating", ("fund",), ("organization",),
+        inverse_label="being evaluated by", module=MODULE,
+        label="Evaluating", group="Investing", group_order=50))
     # Symmetric: canonicalized on write so A/B and B/A cannot both exist and
     # every co-investment is not counted twice.
     register_role(AssociationRole(
@@ -447,3 +589,4 @@ def install() -> None:
         label="Beneficiary of", group="Account parties", group_order=45))
 
     registry.register_org_seed(_seed_gp_roles, module=MODULE)
+    registry.register_org_seed(_seed_default_saved_views, module=MODULE)

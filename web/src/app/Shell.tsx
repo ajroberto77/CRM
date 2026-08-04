@@ -1,11 +1,51 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useEntityList } from '../records/useEntitySchema'
+import { useSavedViews } from '../views/useSavedViews'
 import { CommandPalette } from '../command/CommandPalette'
 import { navLinkClass } from '../lib/navLinkClass'
+import type { EntitySummary } from '../records/types'
 
 const sidebarLinkClass = navLinkClass('crm-sidebar-link')
 const settingsLinkClass = navLinkClass('crm-titlebar-settings')
+
+/** One entity's nav link plus its saved views nested underneath (DESIGN.md's
+ * "saved views nested under each object") -- a separate component, not a
+ * loop-body hook call, so each entity's `useSavedViews` call is a stable,
+ * unconditional hook call for that component instance rather than a
+ * rules-of-hooks violation inside `.map()`. */
+function EntityNavItem({ entity }: { entity: EntitySummary }) {
+  const { views, canUseViews } = useSavedViews(entity.name)
+  const location = useLocation()
+  const onThisEntity =
+    location.pathname === `/e/${entity.name}` || location.pathname.startsWith(`/e/${entity.name}/`)
+  const activeViewId = onThisEntity ? new URLSearchParams(location.search).get('view') : null
+
+  return (
+    <div className="crm-sidebar-entity-group">
+      <NavLink to={`/e/${entity.name}`} className={sidebarLinkClass}>
+        {entity.label}
+      </NavLink>
+      {canUseViews && views.length > 0 && (
+        <div className="crm-sidebar-views">
+          {views.map((view) => (
+            <Link
+              key={view.id}
+              to={`/e/${entity.name}?view=${view.id}`}
+              className={
+                view.id === activeViewId
+                  ? 'crm-sidebar-view-link crm-sidebar-view-link-active'
+                  : 'crm-sidebar-view-link'
+              }
+            >
+              {view.name}
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // Settings owns the whole content area below the titlebar, with its own
 // section nav (SettingsShell.tsx) -- mirroring CATO's own settings panel,
@@ -79,9 +119,7 @@ export function Shell() {
               <div key={groupKey || 'default'}>
                 {groupKey && <div className="crm-sidebar-section">{groupKey}</div>}
                 {groups[groupKey].map((e) => (
-                  <NavLink key={e.name} to={`/e/${e.name}`} className={sidebarLinkClass}>
-                    {e.label}
-                  </NavLink>
+                  <EntityNavItem key={e.name} entity={e} />
                 ))}
               </div>
             ))}

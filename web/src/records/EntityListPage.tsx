@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useEntitySchema } from './useEntitySchema'
 import { RecordTable } from './RecordTable'
 import { RecordBoard } from './RecordBoard'
@@ -26,8 +26,32 @@ function EntityListPageForEntity() {
   const navigate = useNavigate()
   const { schema, loading, error } = useEntitySchema(entity)
   const { views, canUseViews, saveView, deleteView } = useSavedViews(entity)
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [activeView, setActiveView] = useState<SavedView | null>(null)
+
+  // A nav sub-item (Shell.tsx's per-entity saved-view list) links to
+  // `/e/{entity}?view={id}` -- land on that view once it has loaded, rather
+  // than the default unfiltered list. `replace: true` on the reverse write
+  // below (selectView) keeps switching views from spamming browser history.
+  useEffect(() => {
+    const viewId = searchParams.get('view')
+    if (!viewId) {
+      // The param was removed (e.g. the entity's own plain nav link, or
+      // browser Back) -- without this branch, `activeView` stayed pinned to
+      // whatever view was last selected even though the URL and the
+      // sidebar's active-view highlight both now show "none selected".
+      if (activeView !== null) setActiveView(null)
+      return
+    }
+    const match = views.find((v) => v.id === viewId)
+    if (match && activeView?.id !== match.id) setActiveView(match)
+  }, [searchParams, views, activeView])
+
+  function selectView(view: SavedView | null) {
+    setActiveView(view)
+    setSearchParams(view ? { view: view.id } : {}, { replace: true })
+  }
   const [search, setSearch] = useState('')
   // Debounced separately from `search` itself -- the input stays instantly
   // responsive to typing, but the filter (and therefore the list fetch it
@@ -92,7 +116,7 @@ function EntityListPageForEntity() {
           views={views}
           activeViewId={activeView?.id ?? null}
           schema={schema}
-          onSelect={setActiveView}
+          onSelect={selectView}
           onSaveCurrent={(name, kind, groupBy) =>
             // The actual, currently-applied filter (view + search + builder
             // clauses combined) -- not `activeView?.filters`, which is only
@@ -102,7 +126,7 @@ function EntityListPageForEntity() {
           }
           onDelete={(id) => {
             deleteView(id)
-            if (activeView?.id === id) setActiveView(null)
+            if (activeView?.id === id) selectView(null)
           }}
         />}
       </div>

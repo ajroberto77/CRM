@@ -280,6 +280,35 @@ def normalize_country(raw: Optional[str]) -> Optional[str]:
     return value
 
 
+# ── Ticker symbols ───────────────────────────────────────────────────────────
+
+_TICKER_RE = re.compile(r"^[A-Z0-9]{1,10}([.\-][A-Z0-9]{1,10})?$")
+
+
+def normalize_ticker(raw: Optional[str]) -> Optional[str]:
+    """Uppercased, trimmed exchange ticker.
+
+        " brk.a "  -> "BRK.A"
+        "aapl"     -> "AAPL"
+        ""         -> None
+        "not a ticker!" -> None
+
+    One dot or hyphen is accepted (BRK.A/BRK-B class shares); a value needing
+    more punctuation than that is not a ticker this normalizer accepts. Used
+    for `modules/funds`' `security.ticker` -- the one place a listed
+    portfolio company's exchange symbol is recorded (docs/VERTICAL-ASSET-
+    MANAGEMENT.md's `is_public`/security split).
+    """
+    if raw is None:
+        return None
+    value = str(raw).strip().upper()
+    if not value:
+        return None
+    if not _TICKER_RE.match(value):
+        return None
+    return value
+
+
 # ── Display names ────────────────────────────────────────────────────────────
 
 def normalize_name(raw: Optional[str]) -> Optional[str]:

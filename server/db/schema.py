@@ -285,6 +285,11 @@ TABLES: dict[str, dict[str, str]] = {
         # citizenship below, and from an investment_account's own domicile
         # (Phase B), which can legitimately differ from its parent entity's.
         "domicile_country": "text NOT NULL DEFAULT ''",
+        # Domain-neutral (KYC on an ordinary vendor cares about this with no
+        # funds module installed) -- unlike ticker/exchange, which is
+        # lifecycle-shaped (a company lists, delists, changes ticker) and
+        # lives in `modules/funds`' `core.securities` instead.
+        "is_public": "boolean NOT NULL DEFAULT false",
         "custom": "jsonb NOT NULL DEFAULT '{}'::jsonb",
         "created_at": _CREATED,
         "updated_at": _CREATED,

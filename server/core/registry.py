@@ -756,6 +756,7 @@ def register_core_entities() -> None:
             "domicile_country": FieldSpec("domicile_country", "text",
                                           column="domicile_country",
                                           normalize=identity.normalize_country),
+            "is_public": FieldSpec("is_public", "boolean", column="is_public"),
             "role_summary": FieldSpec("role_summary", "jsonb", filterable=False,
                                       sortable=False, writable=False,
                                       compute=_role_summary),

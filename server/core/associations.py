@@ -36,7 +36,7 @@ import uuid
 from datetime import date
 from typing import Any, Iterable, Optional
 
-from server.core import hierarchy, permissions, registry, repository
+from server.core import dates, hierarchy, permissions, registry, repository
 from server.core.permissions import Principal
 from server.core.registry import UnknownField
 from server.db import pool
@@ -76,14 +76,17 @@ def _canonical(
 
 
 def _parse_date(value: Any, label: str) -> Optional[date]:
-    if value in (None, ""):
-        return None
-    if isinstance(value, date):
-        return value
+    """Thin wrapper: `dates.py` holds the actual parsing logic, shared with
+    `query.py`'s role filter (both need it, and `query.py` cannot import this
+    module without closing an import cycle -- see `dates.py`'s docstring).
+    This wrapper's only job is translating a bad value into THIS module's own
+    exception type, so every existing caller here keeps seeing
+    `AssociationError`, not a new exception type leaking out of a shared
+    helper."""
     try:
-        return date.fromisoformat(str(value))
-    except (TypeError, ValueError) as exc:
-        raise AssociationError(f"{label}: {value!r} is not an ISO date") from exc
+        return dates.parse_date(value, label)
+    except dates.DateParseError as exc:
+        raise AssociationError(str(exc)) from exc
 
 
 def associate(
@@ -217,14 +220,7 @@ def end_association(principal: Principal, association_id: str, on: Any = None) -
 
 
 def _as_of_clause(as_of: Optional[date], include_history: bool) -> tuple[str, list[Any]]:
-    if include_history:
-        return "TRUE", []
-    when = as_of or date.today()
-    return (
-        "(valid_from IS NULL OR valid_from <= %s) "
-        "AND (valid_to IS NULL OR valid_to >= %s)",
-        [when, when],
-    )
+    return dates.overlap_clause(include_history=include_history, as_of=as_of)
 
 
 def edges_for(
