@@ -2,9 +2,14 @@
   "name": "crm",
   "private": true,
   "scripts": {
-    "dev": "npm --prefix web run dev",
+    "dev": "concurrently -n backend,frontend -c blue,green \"uvicorn server.api.app:app --reload\" \"npm --prefix web run dev\"",
+    "dev:backend": "uvicorn server.api.app:app --reload",
+    "dev:frontend": "npm --prefix web run dev",
     "build": "npm --prefix web run build",
     "lint": "npm --prefix web run lint",
     "preview": "npm --prefix web run preview"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
   }
 }
