@@ -69,7 +69,7 @@ export function PendingProposalsPage() {
   return (
     <div className="crm-settings-page">
       <div className="crm-entity-page-header">
-        <h1>Pending Proposals</h1>
+        <h1>Scheduling Suggestions</h1>
       </div>
       <p className="crm-settings-hint">
         Scheduling proposals extracted from your email that haven't auto-approved.

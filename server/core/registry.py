@@ -675,7 +675,7 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="organization", table="core.organizations", label="Companies",
         label_field="name", searchable=("name", "domain"),
-        nav_order=10,
+        nav_group="Overview", nav_order=10,
         list_columns=("name", "domain", "domicile_country", "is_internal"),
         fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
@@ -695,7 +695,7 @@ def register_core_entities() -> None:
     register(EntitySpec(
         name="person", table="core.persons", label="People",
         label_field="full_name", searchable=("full_name", "primary_email"),
-        nav_order=20,
+        nav_group="Overview", nav_order=20,
         list_columns=("full_name", "title", "primary_email", "tax_residence_country"),
         fields=spine({
             "full_name": FieldSpec("full_name", "text", column="full_name", required=True),
@@ -741,7 +741,7 @@ def register_core_entities() -> None:
         name="deal", table="core.deals", label="Deals",
         label_field="name", searchable=("name",),
         context_builder=_deal_rotting_context,
-        nav_order=30,
+        nav_group="Overview", nav_order=30,
         list_columns=("name", "stage", "amount", "status", "rotting"),
         fields=spine({
             "name": FieldSpec("name", "text", column="name", required=True),
@@ -765,7 +765,7 @@ def register_core_entities() -> None:
         name="task", table="core.tasks", label="Tasks",
         label_field="title", searchable=("title",),
         default_sort=(("due_on", "asc"), ("updated_at", "desc")),
-        nav_order=40,
+        nav_group="Overview", nav_order=40,
         list_columns=("title", "status", "due_on", "subject_type"),
         fields=spine({
             "title": FieldSpec("title", "text", column="title", required=True),
@@ -933,9 +933,10 @@ def register_core_entities() -> None:
         name="proposed_change", table="core.proposed_changes", label="Proposals",
         label_field="kind", supports_custom_fields=False,
         default_sort=(("created_at", "desc"),),
-        # The real approve/decline flow is the dedicated Pending Proposals
-        # page (server/api/proposals.py), not this generic list -- every
-        # field here is writable=False, so a generic entry is a dead end.
+        # The real approve/decline flow is the dedicated Scheduling
+        # Suggestions page (server/api/proposals.py), not this generic list
+        # -- every field here is writable=False, so a generic entry is a
+        # dead end.
         nav="none",
         fields=spine({
             # spine()'s default owner_id is writable at "team" level, but

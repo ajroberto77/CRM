@@ -24,7 +24,7 @@ R6 doesn't apply. Wired in from `server/core/modules.py` alongside
    messaging axis sends the interaction owner a channel notification
    (best-effort: messaging disabled, or no linked channel, both just mean
    no notification went out -- the proposal is still there, and still
-   decidable, in the generic Pending Proposals UI either way).
+   decidable, in the Scheduling Suggestions UI either way).
 
 A proposal only ever executes a real calendar write against the
 INTERACTION OWNER's own linked account -- this platform has no
@@ -96,7 +96,7 @@ def _notify_pending(org_id: str, owner_user_id: str, proposal: dict[str, Any]) -
     """Best-effort: `channels_dispatch.send()` raising (messaging
     disabled, or the owner has no linked channel) just means no
     notification went out -- the proposal is still `pending` and still
-    decidable through the generic Pending Proposals UI either way, so
+    decidable through the Scheduling Suggestions UI either way, so
     this is never allowed to fail the interaction write that triggered
     it."""
     text = _format_notification(proposal["payload"])

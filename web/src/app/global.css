@@ -266,11 +266,17 @@ button:disabled {
 }
 
 .crm-sidebar-section {
-  font-size: var(--fs-tiny);
+  /* Bolder and higher-contrast than the field-note-sized, --text-muted
+     labels elsewhere (.crm-related-group-header, .crm-record-board-lane-
+     header) -- these are top-level nav sections, not a sub-label inside an
+     already-identified panel, so they need to read as a real section break
+     while scanning the sidebar, not blend into it. */
+  font-size: var(--fs-small);
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-  color: var(--text-muted);
-  padding: 12px 10px 4px;
+  letter-spacing: var(--tracking-wider);
+  color: var(--text-secondary);
+  padding: 14px 10px 6px;
   margin-top: 4px;
 }
 

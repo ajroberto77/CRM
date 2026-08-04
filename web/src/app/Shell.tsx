@@ -71,7 +71,7 @@ export function Shell() {
               Home
             </NavLink>
             <NavLink to="/review/proposals" className={sidebarLinkClass}>
-              Pending Proposals
+              Scheduling Suggestions
             </NavLink>
             {groupKeys.length > 0 && <div className="crm-sidebar-divider" />}
             {entitiesError && <div className="crm-sidebar-error">Failed to load navigation</div>}
