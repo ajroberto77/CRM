@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { apiGet, withQuery } from '../lib/api'
 import { useAuth } from '../auth/AuthContext'
 import { formatCurrency } from '../lib/format'
+import { DashboardTile } from '../records/DashboardTile'
 import { useAggregate } from '../records/useAggregate'
 import type { ListResult, RecordRow } from '../records/types'
 
@@ -115,18 +116,8 @@ export function HomePage() {
             )}
           </div>
 
-          {!dealCounts.unauthorized && dealCounts.groups.length > 0 && (
-            <div className="crm-home-tile crm-home-tile-wide">
-              <div className="crm-home-tile-label">Deals by status</div>
-              <div className="crm-home-stat-row">
-                {dealCounts.groups.map((g) => (
-                  <Link to="/e/deal" key={String(g.key)} className="crm-home-stat">
-                    <div className="crm-home-stat-value">{g.value}</div>
-                    <div className="crm-home-stat-label">{String(g.key)}</div>
-                  </Link>
-                ))}
-              </div>
-            </div>
+          {!dealCounts.unauthorized && (
+            <DashboardTile title="Deals by status" groups={dealCounts.groups} linkTo="/e/deal" />
           )}
         </div>
       )}

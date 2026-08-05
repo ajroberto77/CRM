@@ -157,6 +157,13 @@ def entity_schema(
     for name, fspec in spec.fields.items():
         if not perms.readable_field(name):
             continue
+        # A field with its own dedicated presentation elsewhere (Phase 12's
+        # `role_summary` -> role pills) is omitted the same way a masked
+        # field is -- the record's own data still carries it regardless,
+        # since a compute field applies independent of what this endpoint
+        # exposes; only the generic field-list UI is meant to skip it.
+        if not fspec.show_in_detail:
+            continue
         fields[name] = {
             "kind": fspec.kind, "filterable": fspec.filterable,
             "sortable": fspec.sortable,
@@ -188,6 +195,15 @@ def entity_schema(
                 "operators": query.operators_for(row["kind"]),
             })
 
+    profile_blocks = [
+        {
+            "key": b.key, "region": b.region, "title": b.title or b.key.replace("_", " "),
+            "order": b.order, "roles": list(b.roles),
+            "show_if_field": b.show_if_field, "show_if_equals": b.show_if_equals,
+        }
+        for b in registry.profile_blocks_for(entity)
+    ]
+
     return {
         "name": spec.name, "label": spec.label or spec.name,
         "label_field": spec.label_field,
@@ -196,11 +212,56 @@ def entity_schema(
         "supports_custom_fields": spec.supports_custom_fields,
         "admin_only": spec.admin_only,
         "list_columns": list(spec.list_columns),
+        "profile_blocks": profile_blocks,
         "fields": fields, "custom_fields": custom_fields,
         "can_create": perms.can_create,
         "read_level": perms.read_level, "edit_level": perms.edit_level,
         "delete_level": perms.delete_level,
     }
+
+
+@router.get("/dashboard-tiles")
+def dashboard_tiles(
+    nav_group: str, principal: Principal = Depends(current_principal)
+) -> dict[str, Any]:
+    """Every tile registered for `nav_group` (`registry.register_dashboard_tile()`)
+    the principal can at least read the entity of -- `VerticalDashboard.tsx`
+    builds one aggregate tile per entry via the existing generic `POST
+    /records/{entity}/aggregate`, never a bespoke per-vertical route (R4).
+    Filtered the same way `list_entities()` filters the sidebar: a tile
+    whose entity a non-admin role has no grant on is dropped here rather
+    than left to `useAggregate`'s own 403 fallback to hide it client-side.
+    """
+    tiles = []
+    for tile in registry.dashboard_tiles_for(nav_group):
+        if not principal.for_object(tile.entity).allows("read"):
+            continue
+        tiles.append({
+            "key": tile.key, "title": tile.title, "entity": tile.entity,
+            "group_by": tile.group_by, "metric": tile.metric,
+            "metric_field": tile.metric_field, "order": tile.order,
+        })
+    return {"tiles": tiles}
+
+
+@router.get("/dashboard-groups")
+def dashboard_groups(principal: Principal = Depends(current_principal)) -> dict[str, Any]:
+    """Every distinct `nav_group` with at least one dashboard tile THIS
+    principal can at least read the entity of -- what the sidebar's
+    dashboard-link icon is built from, instead of a fixed list of verticals
+    hardcoded in the frontend (R6). Filtered the same way `dashboard_tiles()`
+    filters its own list: showing the icon for a vertical whose every tile
+    a non-admin role has no grant on would read as "nothing here" once
+    clicked through, not as the absence it actually is.
+    """
+    groups = [
+        group for group in registry.dashboard_nav_groups()
+        if any(
+            principal.for_object(tile.entity).allows("read")
+            for tile in registry.dashboard_tiles_for(group)
+        )
+    ]
+    return {"nav_groups": groups}
 
 
 @router.get("/{entity}/roles")

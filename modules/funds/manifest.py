@@ -30,9 +30,13 @@ from __future__ import annotations
 from server.core import identity, permissions, registry, repository
 from server.core.registry import (
     AssociationRole,
+    DashboardTile,
     EntitySpec,
     FieldSpec,
+    ProfileBlock,
     register,
+    register_dashboard_tile,
+    register_profile_block,
     register_role,
     spine,
 )
@@ -587,6 +591,41 @@ def install() -> None:
         "beneficiary_of", ("person",), ("investment_account",),
         inverse_label="beneficiaries", module=MODULE,
         label="Beneficiary of", group="Account parties", group_order=45))
+
+    # Phase 12: role-gated profile blocks. `RecordPage.tsx` composes these
+    # into its existing three regions by `region`/`order`; core never learns
+    # what "LP"/"GP"/"portfolio company" means, only that some block applies
+    # once THIS record's live `role_summary` (Phase 9) says so.
+    register_profile_block(ProfileBlock(
+        key="funds.lp_summary", applies_to=("organization", "person"),
+        region="left", title="LP summary", order=20, module=MODULE,
+        roles=("lp_in",),
+    ))
+    register_profile_block(ProfileBlock(
+        key="funds.gp_summary", applies_to=("organization", "person"),
+        region="left", title="GP summary", order=21, module=MODULE,
+        roles=("gp_of", "principal_of"),
+    ))
+    register_profile_block(ProfileBlock(
+        key="funds.portfolio_summary", applies_to=("organization",),
+        region="left", title="Portfolio summary", order=22, module=MODULE,
+        roles=("portfolio_of", "evaluating"),
+    ))
+
+    register_dashboard_tile(DashboardTile(
+        key="funds.funds_by_status", nav_group="Investing", module=MODULE,
+        title="Funds by status", entity="fund", group_by="status", order=10,
+    ))
+    register_dashboard_tile(DashboardTile(
+        key="funds.commitments_by_status", nav_group="Investing", module=MODULE,
+        title="Commitments by status", entity="commitment", group_by="status",
+        order=20,
+    ))
+    register_dashboard_tile(DashboardTile(
+        key="funds.committed_by_status", nav_group="Investing", module=MODULE,
+        title="Committed capital by status", entity="commitment",
+        group_by="status", metric="sum", metric_field="amount", order=30,
+    ))
 
     registry.register_org_seed(_seed_gp_roles, module=MODULE)
     registry.register_org_seed(_seed_default_saved_views, module=MODULE)

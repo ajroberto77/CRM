@@ -43,6 +43,21 @@ export interface CustomFieldSchema {
   operators: string[]
 }
 
+/** One entry in `EntitySchema.profile_blocks` -- mirrors
+ * `server/core/registry.py`'s `ProfileBlock` as exposed by
+ * `GET /records/{entity}/schema`. `RecordPage.tsx` filters these against a
+ * record's own `role_summary`/field values at render time; the schema only
+ * ever describes what COULD apply to this entity type. */
+export interface ProfileBlockSchema {
+  key: string
+  region: 'left' | 'center' | 'right'
+  title: string
+  order: number
+  roles: string[]
+  show_if_field: string | null
+  show_if_equals: unknown
+}
+
 export interface EntitySchema {
   name: string
   label: string
@@ -52,6 +67,7 @@ export interface EntitySchema {
   supports_custom_fields: boolean
   admin_only: boolean
   list_columns: string[]
+  profile_blocks: ProfileBlockSchema[]
   fields: Record<string, FieldSchema>
   custom_fields: CustomFieldSchema[]
   can_create: boolean
@@ -102,6 +118,19 @@ export type FilterNode =
    * is the first real producer of this shape; the UI only ever passes it
    * through opaquely (FilterBuilder never constructs one by hand). */
   | { role: string; direction: 'from' | 'to'; as_of?: string; include_history?: boolean }
+
+/** One entry in an organization's/person's `role_summary` computed field
+ * (server/core/registry.py's `_role_summary` + `associations.
+ * role_summary_for()`) -- the record's live, emergent "type," never
+ * persisted. Shown as pills next to the record title in `RecordPage.tsx`
+ * and used there to gate which `ProfileBlockSchema` entries apply. */
+export interface RoleSummaryEntry {
+  role: string
+  direction: 'in' | 'out'
+  label: string
+  group: string
+  group_order: number
+}
 
 export interface RelatedItem {
   association_id: string

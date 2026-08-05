@@ -326,6 +326,30 @@ button:disabled {
   padding: 8px 10px;
 }
 
+/* A section header (e.g. "Investing") paired with its dashboard link
+   (Phase 12) -- only rendered when at least one DashboardTile is
+   registered for that nav_group, so most sections show no icon at all. */
+.crm-sidebar-section-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 8px;
+}
+
+.crm-sidebar-section-row .crm-sidebar-section {
+  padding-right: 0;
+}
+
+.crm-sidebar-dashboard-link {
+  text-decoration: none;
+  font-size: var(--fs-small);
+  opacity: 0.7;
+}
+
+.crm-sidebar-dashboard-link:hover {
+  opacity: 1;
+}
+
 .crm-content {
   flex: 1;
   min-width: 0;
@@ -830,12 +854,43 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* A record holding several roles at once (routine -- e.g. a person can be
+     lp_in, gp_of and principal_of simultaneously) plus a long title would
+     otherwise force the row wider than its container instead of wrapping:
+     .crm-role-pill-row's own flex-wrap only has an effect once ITS box is
+     actually constrained narrower than its content, which never happens
+     while the header itself refuses to wrap. */
+  flex-wrap: wrap;
 }
 
 .crm-record-page-header h1 {
   flex: 1;
   font-size: var(--fs-title);
   margin: 0;
+}
+
+/* A record's emergent "type" (Phase 9's `role_summary` computed field,
+   never a stored column -- R6: "a role is not an entity type") at a glance
+   next to its title. Static, not a `.crm-view-pill` -- there is nothing to
+   click or select here, just a label. */
+.crm-role-pill-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.crm-role-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--tint-accent-bg);
+  border: 1px solid var(--tint-accent-border);
+  color: var(--accent);
+  font-size: var(--fs-tiny);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .crm-record-page-back {
@@ -867,18 +922,93 @@ button:disabled {
   gap: 12px;
 }
 
+/* ── Profile blocks (Phase 12) ────────────────────────────────────────── */
+/* A module's role-gated panel on a record page (server/core/registry.py's
+   ProfileBlock, composed in by RecordPage.tsx into whichever of the three
+   regions above it declares) -- one card style shared by every module's
+   blocks rather than each inventing its own, so a page with several blocks
+   from different modules still reads as one system. */
+
+.crm-profile-block {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crm-profile-block-title {
+  font-size: var(--fs-small);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--text-muted);
+}
+
+.crm-profile-block-body {
+  font-size: var(--fs-body);
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.crm-profile-block-stat-row {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.crm-profile-block-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.crm-profile-block-stat-value {
+  font-size: var(--fs-title);
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.crm-profile-block-stat-label {
+  font-size: var(--fs-tiny);
+  color: var(--text-muted);
+}
+
+.crm-profile-block-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crm-profile-block-empty {
+  color: var(--text-muted);
+  font-size: var(--fs-small);
+}
+
 .crm-record-page-center {
   flex: 2 1 420px;
   min-width: 0;
   border-left: 1px solid var(--border-default);
   border-right: 1px solid var(--border-default);
   padding: 0 var(--content-pad);
+  /* A flex column with a gap, matching .crm-record-page-left, so a profile
+     block appended after the timeline/records tab (none targets "center"
+     yet, but the composition mechanism supports it) gets the same
+     consistent spacing rather than sitting flush against the last row. */
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .crm-record-page-center-tabs {
   display: flex;
   gap: 6px;
-  margin-bottom: 10px;
+  /* No margin-bottom -- the parent .crm-record-page-center is now a flex
+     column with its own `gap`, which would otherwise stack with this and
+     double the space before the tab body. */
 }
 
 .crm-record-page-right {

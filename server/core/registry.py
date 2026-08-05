@@ -129,6 +129,18 @@ class FieldSpec:
     # entity name (R6) or a validator -- which can only reject, never
     # rewrite a column -- standing in as a worse substitute (R1).
     normalize: Optional[Callable[[Any], Optional[Any]]] = None
+    # False for a field that has its own dedicated presentation elsewhere and
+    # would otherwise show up a second time as a raw value in the generic
+    # field list -- `role_summary`'s first user: it already renders as role
+    # pills next to the record title (RecordPage.tsx, Phase 12) and gates
+    # which profile blocks apply, so showing it a second time as a raw
+    # `[{"role":"portfolio_of",...}]` blob in the ordinary field list is
+    # pure noise, not a second real presentation of the value. Omitted from
+    # `GET /records/{entity}/schema`'s `fields` entirely (same as a masked
+    # field) rather than flagged for the frontend to filter -- the record's
+    # OWN data still carries the value regardless, since a compute field is
+    # applied at read time independent of what the schema endpoint exposes.
+    show_in_detail: bool = True
 
     @property
     def is_custom(self) -> bool:
@@ -224,6 +236,61 @@ class AssociationRole:
     # of scattering into one block per role.
     group: str = ""
     group_order: int = 100
+
+
+_REGIONS = ("left", "center", "right")
+
+
+@dataclass(frozen=True)
+class ProfileBlock:
+    """A module-contributed panel on a record page, shown only when the
+    record's live role graph (or a plain field) actually applies -- the
+    mechanism that lets a portfolio company's record page show a "Portfolio
+    summary" block and an ordinary vendor's page not, with core never
+    learning what a fund is (R6).
+
+    Composed additively into `RecordPage.tsx`'s existing three regions
+    (`region`, `order`) -- the three-region shape itself (left inline-
+    editable summary / center merged timeline / right related-records) is a
+    deliberate constraint for fast, predictable record editing and is never
+    replaced, only added to.
+
+    `roles`, if non-empty, gates the block on the record's `role_summary`
+    (Phase 9's computed field) containing at least one of these role names --
+    e.g. `roles=("portfolio_of",)` shows only on an organization that is
+    currently a portfolio company. `show_if_field`/`show_if_equals` gates on
+    a plain field value instead (e.g. `is_public == True`), for a
+    distinction role_summary can't express. Both may be set (both must pass);
+    both empty means "always eligible for `applies_to`'s entities."
+    """
+    key: str
+    applies_to: tuple[str, ...]
+    region: str
+    title: str = ""
+    order: int = 100
+    module: str = "core"
+    roles: tuple[str, ...] = ()
+    show_if_field: Optional[str] = None
+    show_if_equals: Any = None
+
+
+@dataclass(frozen=True)
+class DashboardTile:
+    """A module-contributed tile on a per-`nav_group` vertical dashboard --
+    same shape as `ProfileBlock`, but for `VerticalDashboard.tsx` instead of
+    a record page. Reduces `entity`'s visible rows by `group_by`
+    (`repository.aggregate()`'s own generic grouping), never a bespoke
+    per-tile query.
+    """
+    key: str
+    nav_group: str
+    title: str
+    entity: str
+    group_by: str
+    metric: str = "count"
+    metric_field: Optional[str] = None
+    order: int = 100
+    module: str = "core"
 
 
 # ── The singleton ────────────────────────────────────────────────────────────
@@ -336,6 +403,72 @@ def role_presentation(role_spec: AssociationRole, direction: str) -> dict[str, A
         "group": role_spec.group or role_spec.module,
         "group_order": role_spec.group_order,
     }
+
+
+# ── Profile blocks & dashboard tiles ─────────────────────────────────────────
+#
+# Same idempotent-registration idiom as register_role()/register_validator():
+# a module contributes through this exact function, never by core importing
+# it, and re-declaring the same block on a second install() call (every real
+# app startup, every test that spins up a fresh TestClient) does not
+# duplicate it.
+
+_PROFILE_BLOCKS: dict[str, ProfileBlock] = {}
+_DASHBOARD_TILES: dict[str, DashboardTile] = {}
+
+
+def register_profile_block(block: ProfileBlock) -> ProfileBlock:
+    existing = _PROFILE_BLOCKS.get(block.key)
+    if existing is not None and existing.module != block.module:
+        raise RegistryError(
+            f"profile block {block.key!r} already registered by module {existing.module!r}"
+        )
+    _PROFILE_BLOCKS[block.key] = block
+    return block
+
+
+def profile_blocks_for(entity_name: str) -> list[ProfileBlock]:
+    """Every block that can appear on `entity_name`'s record page, ordered by
+    `(region, order, key)` so a caller renders each region's blocks in a
+    stable sequence without re-sorting."""
+    return sorted(
+        (b for b in _PROFILE_BLOCKS.values() if entity_name in b.applies_to),
+        key=lambda b: (b.region, b.order, b.key),
+    )
+
+
+def reset_profile_blocks() -> None:
+    """Drop every registered profile block. Tests only."""
+    _PROFILE_BLOCKS.clear()
+
+
+def register_dashboard_tile(tile: DashboardTile) -> DashboardTile:
+    existing = _DASHBOARD_TILES.get(tile.key)
+    if existing is not None and existing.module != tile.module:
+        raise RegistryError(
+            f"dashboard tile {tile.key!r} already registered by module {existing.module!r}"
+        )
+    _DASHBOARD_TILES[tile.key] = tile
+    return tile
+
+
+def dashboard_tiles_for(nav_group: str) -> list[DashboardTile]:
+    return sorted(
+        (t for t in _DASHBOARD_TILES.values() if t.nav_group == nav_group),
+        key=lambda t: (t.order, t.key),
+    )
+
+
+def dashboard_nav_groups() -> list[str]:
+    """Every distinct `nav_group` with at least one registered tile -- what a
+    caller building the list of vertical-dashboard routes/nav entries walks,
+    instead of a fixed list of verticals hardcoded anywhere (R6)."""
+    return sorted({t.nav_group for t in _DASHBOARD_TILES.values()})
+
+
+def reset_dashboard_tiles() -> None:
+    """Drop every registered dashboard tile. Tests only."""
+    _DASHBOARD_TILES.clear()
 
 
 # ── Write-time validators ────────────────────────────────────────────────────
@@ -501,6 +634,8 @@ def reset() -> None:
     _ROLES.clear()
     _VALIDATORS.clear()
     _ORG_SEEDS.clear()
+    _PROFILE_BLOCKS.clear()
+    _DASHBOARD_TILES.clear()
 
 
 # ── Field resolution ─────────────────────────────────────────────────────────
@@ -624,6 +759,40 @@ def verify(tables: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
                 "validator_module": validator.module,
                 "problem": "unknown_entity", "entity": validator.entity,
             })
+
+    known_roles = {r.name for r in roles()}
+    for block in _PROFILE_BLOCKS.values():
+        if block.region not in _REGIONS:
+            problems.append({"profile_block": block.key, "problem": "bad_region",
+                             "region": block.region})
+        for entity_name in block.applies_to:
+            if entity_name not in known:
+                problems.append({"profile_block": block.key, "problem": "unknown_entity",
+                                 "entity": entity_name})
+        for role_name in block.roles:
+            if role_name not in known_roles:
+                problems.append({"profile_block": block.key, "problem": "unknown_role",
+                                 "role": role_name})
+        if block.show_if_field is not None:
+            for entity_name in block.applies_to:
+                if entity_name in known and block.show_if_field not in _ENTITIES[entity_name].fields:
+                    problems.append({
+                        "profile_block": block.key, "problem": "show_if_field_missing",
+                        "entity": entity_name, "field": block.show_if_field,
+                    })
+
+    for tile in _DASHBOARD_TILES.values():
+        if tile.entity not in known:
+            problems.append({"dashboard_tile": tile.key, "problem": "unknown_entity",
+                             "entity": tile.entity})
+            continue
+        tile_spec = _ENTITIES[tile.entity]
+        if tile.group_by not in tile_spec.fields:
+            problems.append({"dashboard_tile": tile.key, "problem": "group_by_field_missing",
+                             "field": tile.group_by})
+        if tile.metric_field is not None and tile.metric_field not in tile_spec.fields:
+            problems.append({"dashboard_tile": tile.key, "problem": "metric_field_missing",
+                             "field": tile.metric_field})
     return problems
 
 
@@ -759,7 +928,7 @@ def register_core_entities() -> None:
             "is_public": FieldSpec("is_public", "boolean", column="is_public"),
             "role_summary": FieldSpec("role_summary", "jsonb", filterable=False,
                                       sortable=False, writable=False,
-                                      compute=_role_summary),
+                                      show_in_detail=False, compute=_role_summary),
         }),
     ))
 
@@ -788,7 +957,7 @@ def register_core_entities() -> None:
                                              column="citizenship_country"),
             "role_summary": FieldSpec("role_summary", "jsonb", filterable=False,
                                       sortable=False, writable=False,
-                                      compute=_role_summary),
+                                      show_in_detail=False, compute=_role_summary),
         }),
     ))
 

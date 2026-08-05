@@ -4,6 +4,7 @@ import { LoginPage } from '../auth/LoginPage'
 import { SetupPage } from '../auth/SetupPage'
 import { Shell } from './Shell'
 import { HomePage } from './HomePage'
+import { VerticalDashboard } from './VerticalDashboard'
 import { EntityListPage } from '../records/EntityListPage'
 import { RecordPage } from '../records/RecordPage'
 import { SettingsShell } from '../settings/SettingsShell'
@@ -35,6 +36,11 @@ export function App() {
             table+detail "/e/..." gives a record following a reference link.
             Not a vite-proxied prefix, so a hard reload/deep link is safe. */}
         <Route path="r/:entity/:recordId" element={<RecordPage />} />
+        {/* Phase 12: one dashboard route per registered `nav_group`
+            (registry.register_dashboard_tile()), not one route per
+            vertical -- a module registering tiles for a new nav_group gets
+            a working dashboard here with no change to this file. */}
+        <Route path="dashboard/:navGroup" element={<VerticalDashboard />} />
         {/* Not "/settings/*" -- that whole prefix is proxied straight to
             the backend API (vite.config.ts), which really does own
             "/settings/llm" etc. as real JSON routes (server/api/settings.py).

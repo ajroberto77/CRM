@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import { useEntityList } from '../records/useEntitySchema'
+import { useDashboardNavGroups } from '../records/useDashboardTiles'
 import { useSavedViews } from '../views/useSavedViews'
 import { CommandPalette } from '../command/CommandPalette'
 import { navLinkClass } from '../lib/navLinkClass'
@@ -57,6 +58,7 @@ const SETTINGS_PATH_PREFIX = '/admin/settings'
 export function Shell() {
   const { user, org, logout } = useAuth()
   const { entities, error: entitiesError } = useEntityList()
+  const { navGroups: dashboardNavGroups } = useDashboardNavGroups()
   const location = useLocation()
   const inSettings = location.pathname.startsWith(SETTINGS_PATH_PREFIX)
 
@@ -117,7 +119,20 @@ export function Shell() {
             {entitiesError && <div className="crm-sidebar-error">Failed to load navigation</div>}
             {groupKeys.map((groupKey) => (
               <div key={groupKey || 'default'}>
-                {groupKey && <div className="crm-sidebar-section">{groupKey}</div>}
+                {groupKey && (
+                  <div className="crm-sidebar-section-row">
+                    <div className="crm-sidebar-section">{groupKey}</div>
+                    {dashboardNavGroups.includes(groupKey) && (
+                      <Link
+                        to={`/dashboard/${groupKey}`}
+                        className="crm-sidebar-dashboard-link"
+                        title={`${groupKey} dashboard`}
+                      >
+                        📊
+                      </Link>
+                    )}
+                  </div>
+                )}
                 {groups[groupKey].map((e) => (
                   <EntityNavItem key={e.name} entity={e} />
                 ))}

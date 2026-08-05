@@ -259,3 +259,126 @@ class TestNav:
         ))
         problems = registry.verify(schema.all_tables())
         assert not any(p["entity"] == spec.name for p in problems)
+
+
+@pytest.fixture
+def temp_profile_block():
+    """Same reach-into-internals convention as `temp_entity` -- there is no
+    public unregister for a `ProfileBlock` either."""
+    registered: list[str] = []
+
+    def _make(block: registry.ProfileBlock) -> registry.ProfileBlock:
+        registry.register_profile_block(block)
+        registered.append(block.key)
+        return block
+
+    yield _make
+    for key in registered:
+        registry._PROFILE_BLOCKS.pop(key, None)
+
+
+@pytest.fixture
+def temp_dashboard_tile():
+    registered: list[str] = []
+
+    def _make(tile: registry.DashboardTile) -> registry.DashboardTile:
+        registry.register_dashboard_tile(tile)
+        registered.append(tile.key)
+        return tile
+
+    yield _make
+    for key in registered:
+        registry._DASHBOARD_TILES.pop(key, None)
+
+
+class TestProfileBlocks:
+    def test_applies_only_to_its_declared_entities(self, temp_profile_block):
+        temp_profile_block(registry.ProfileBlock(
+            key="_test_block", applies_to=("organization",), region="left", module="test",
+        ))
+        assert "_test_block" in {b.key for b in registry.profile_blocks_for("organization")}
+        assert "_test_block" not in {b.key for b in registry.profile_blocks_for("person")}
+
+    def test_ordered_by_region_then_order_then_key(self, temp_profile_block):
+        temp_profile_block(registry.ProfileBlock(
+            key="_test_block_b", applies_to=("organization",), region="left",
+            order=10, module="test",
+        ))
+        temp_profile_block(registry.ProfileBlock(
+            key="_test_block_a", applies_to=("organization",), region="left",
+            order=10, module="test",
+        ))
+        keys = [b.key for b in registry.profile_blocks_for("organization")
+                if b.key.startswith("_test_block")]
+        assert keys == ["_test_block_a", "_test_block_b"]
+
+    def test_bad_region_is_rejected(self, temp_profile_block):
+        block = temp_profile_block(registry.ProfileBlock(
+            key="_test_bad_region", applies_to=("organization",), region="top", module="test",
+        ))
+        problems = registry.verify(schema.all_tables())
+        assert {"profile_block": block.key, "problem": "bad_region", "region": "top"} in problems
+
+    def test_unknown_applies_to_entity_is_rejected(self, temp_profile_block):
+        block = temp_profile_block(registry.ProfileBlock(
+            key="_test_bad_entity", applies_to=("not_a_real_entity",), region="left", module="test",
+        ))
+        problems = registry.verify(schema.all_tables())
+        assert {"profile_block": block.key, "problem": "unknown_entity",
+                "entity": "not_a_real_entity"} in problems
+
+    def test_unknown_role_is_rejected(self, temp_profile_block):
+        block = temp_profile_block(registry.ProfileBlock(
+            key="_test_bad_role", applies_to=("organization",), region="left",
+            roles=("not_a_real_role",), module="test",
+        ))
+        problems = registry.verify(schema.all_tables())
+        assert {"profile_block": block.key, "problem": "unknown_role",
+                "role": "not_a_real_role"} in problems
+
+    def test_missing_show_if_field_is_rejected(self, temp_profile_block):
+        block = temp_profile_block(registry.ProfileBlock(
+            key="_test_bad_show_if", applies_to=("organization",), region="left",
+            show_if_field="not_a_real_field", show_if_equals=True, module="test",
+        ))
+        problems = registry.verify(schema.all_tables())
+        assert {"profile_block": block.key, "problem": "show_if_field_missing",
+                "entity": "organization", "field": "not_a_real_field"} in problems
+
+
+class TestDashboardTiles:
+    def test_scoped_to_its_own_nav_group(self, temp_dashboard_tile):
+        temp_dashboard_tile(registry.DashboardTile(
+            key="_test_tile", nav_group="_TestGroup", title="Test", entity="organization",
+            group_by="domicile_country", module="test",
+        ))
+        assert "_test_tile" in {t.key for t in registry.dashboard_tiles_for("_TestGroup")}
+        assert "_TestGroup" in registry.dashboard_nav_groups()
+
+    def test_unknown_entity_is_rejected(self, temp_dashboard_tile):
+        tile = temp_dashboard_tile(registry.DashboardTile(
+            key="_test_bad_tile_entity", nav_group="_TestGroup", title="Test",
+            entity="not_a_real_entity", group_by="status", module="test",
+        ))
+        problems = registry.verify(schema.all_tables())
+        assert {"dashboard_tile": tile.key, "problem": "unknown_entity",
+                "entity": "not_a_real_entity"} in problems
+
+    def test_missing_group_by_field_is_rejected(self, temp_dashboard_tile):
+        tile = temp_dashboard_tile(registry.DashboardTile(
+            key="_test_bad_group_by", nav_group="_TestGroup", title="Test",
+            entity="organization", group_by="not_a_real_field", module="test",
+        ))
+        problems = registry.verify(schema.all_tables())
+        assert {"dashboard_tile": tile.key, "problem": "group_by_field_missing",
+                "field": "not_a_real_field"} in problems
+
+    def test_missing_metric_field_is_rejected(self, temp_dashboard_tile):
+        tile = temp_dashboard_tile(registry.DashboardTile(
+            key="_test_bad_metric_field", nav_group="_TestGroup", title="Test",
+            entity="organization", group_by="domicile_country", metric="sum",
+            metric_field="not_a_real_field", module="test",
+        ))
+        problems = registry.verify(schema.all_tables())
+        assert {"dashboard_tile": tile.key, "problem": "metric_field_missing",
+                "field": "not_a_real_field"} in problems
